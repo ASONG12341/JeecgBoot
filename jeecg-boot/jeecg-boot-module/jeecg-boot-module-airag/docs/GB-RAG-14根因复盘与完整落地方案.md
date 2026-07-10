@@ -1,8 +1,8 @@
-# GB 标准文档在 RAG 系统中的 14 根因复盘与完整落地方案（v2 · 2026 现代技术栈版）
+# GB 标准文档在 RAG 系统中的 14 根因复盘与完整落地方案（v3 · 2026 完整方案版）
 
 > **作者**：AI 模块组
 > **日期**：2026-07-10
-> **替代版本**：v1（YAML+正则版本，已废弃）
+> **替代版本**：v2（LLM Structured Output 版本）已被 v3 覆盖；v1（YAML+正则版本）早已废弃
 > **适用模块**：`jeecg-boot-module-airag`
 > **关联代码**：`MineruApiClient.java`、`EmbeddingHandler.java`、`AIChatHandler.java`、`KnowConfigBean.java`
 > **技术栈基准（已实测）**：
@@ -174,12 +174,66 @@ HyDE（Hypothetical Document Embeddings）原始论文是 Gao et al. 2022-2023�
 - **维护状态**：活跃（但 `README` 明确说"代码作为示范，非官方支持"）
 - **警告**："GraphRAG indexing can be an expensive operation"——必须在生产前跑小规模测试
 
+### 2.5 GitNexus 工作流门禁（**强制**——本方案所有代码改动的前置条件）
+
+> **来源**：项目根 `CLAUDE.md`「GitNexus — Code Intelligence」段，已被仓库管理员升级为强制规则。
+> **本规则等价于生产环境的"提交审批"，不可跳过。**
+
+| 阶段 | 必须执行的 GitNexus 命令 | 失败动作 |
+|------|----------------------|---------|
+| **改任何 Java 方法/类/字段前** | `mcp__gitnexus__impact({target: "SymbolName", direction: "upstream", summaryOnly: true})` | 拿到 blast radius 后告诉用户：哪些调用者会受影响、风险等级（LOW / MEDIUM / HIGH / CRITICAL） |
+| **`HIGH` 或 `CRITICAL` 风险时** | 暂停 + 明文告知用户：「本次改动影响 X 个直接调用者、Y 个 process 流、Z 个模块，风险等级 HIGH，建议：① 拆 PR ② 写回退方案」 | 不允许直接进入代码改动 |
+| **commit 前** | `mcp__gitnexus__detect_changes({scope: "staged"})` | 检查变更只影响预期符号/流；若命中未预期路径，停下来调查 |
+| **生成回滚对比** | `mcp__gitnexus__detect_changes({scope: "compare", base_ref: "main"})` | PR review 时给出与 main 分支的 diff 全景 |
+| **问题溯源** | `mcp__gitnexus__query({search_query: "..."})` / `context({name: "..."})` | 改前先理解一个符号的所有调用方、所属 process 流 |
+
+**针对本方案的对应矩阵**：
+
+| 本文档章节 | 涉及 Java 符号（须先 impact） | 影响模块 |
+|----------|----------------------------|---------|
+| §4.1 Hybrid 检索 | `EmbeddingHandler.getEmbedStore` | 全知识库检索链路 |
+| §4.2 Tool Calling | `AIChatHandler.completions` | 全量 LLM 调用 |
+| §4.3 意图解析器 | 新增 `GbIntentExtractor` 接口 + `extractWithFallback` | 新文件，blast radius = 0，但要被 AIChatHandler 调用（影响面 ±1） |
+| §4.4.1 图像描述器 | 新增 `ImageDescriber` | 新文件 |
+| §4.5/§4.6 Chunk schema | `EmbeddingHandler.embeddingDocument`（写入路径） | **HIGH 风险**：每条入库文档都走它 |
+| §4.11 虚拟生成列 | 新增 DDL（Flyway Vxxx__） | 不动 Java，但 pgvector 索引需重建 |
+| §4.13 审计表 | `AIChatHandler.completions` | HIGH 风险，会增加每条调用的 DB 写 |
+
+**GitNexus 工作流伪代码**（PR 前必跑）：
+
+```java
+// 1) 改前
+impact  ←  mcp__gitnexus__impact(target=EmbeddingHandler_getEmbedStore, direction=upstream, summaryOnly=true)
+if impact.risk ∈ {HIGH, CRITICAL}:  →  STOP, report to user, propose smaller PR
+if impact.summary.affected_processes > 5:  →  STOP, ask for Phase 拆分
+
+// 2) commit 前
+changes ← mcp__gitnexus__detect_changes(scope=staged)
+if changes.affected_symbols ⊄ expected_set:  →  STOP, investigate
+if changes.risk_summary contains "CRITICAL":  →  STOP, split PR
+
+// 3) PR 后 review（可选）
+compare  ←  mcp__gitnexus__detect_changes(scope=compare, base_ref=main)
+// 把 compare 输出贴到 PR 评论里
+```
+
+**索引时效**：
+
+- 本项目 GitNexus 索引于 `2026-07-10` 建立（34824 符号 / 75813 关系 / 300 execution flows）
+- 仓库根执行 `node .gitnexus/run.cjs analyze` 可自动重新分析
+- 索引 stale 时 GitNexus 工具会返回不准确结果，**必须先重建再跑 impact**
+
 ---
 
-## 3. 关键架构原则：四层协同（v2 升级版）
+## 3. 关键架构原则：五层协同（v3 升级：加 L0 GitNexus 门禁）
 
 ```
 ┌──────────────────────────────────────────────────────────┐
+│  L0 门禁 · GitNexus 工作流（强制）                         │
+│        影响分析 impact + 变更检测 detect_changes          │
+│        详情见 §2.5；改前必跑、commit 前必跑                │
+│        解决：避免盲改引入未预期风险                       │
+├──────────────────────────────────────────────────────────┤
 │  L1 离线 · PostgreSQL 18 + 图谱                            │
 │        gb_chunks (UUIDv7 主键) + Skip Scan 多列索引         │
 │        gb_param (虚拟生成列) + GraphRAG 引用图              │
@@ -718,6 +772,85 @@ ingestor.ingest(documents);  // 自动产出 question 嵌入 + ground-truth 段�
 | **Phase 3**（中期） | 6~8 周 | 图谱 + ColPali | 6 人周 | GraphRAG (Python) + 实体导入 Postgres + ColPali ONNX 集成 |
 | **Phase 4**（长期） | 持续 | 可信闭环 | 持续 | RAGAS 评测集 + LLM-as-Judge + 监控看板 |
 
+### 5.1 Phase 1 强制前置：GitNexus pre-flight（不开工先跑）
+
+> 对应 §2.5 工作流门禁。Phase 1 涉及 `EmbeddingHandler.embeddingDocument` 与 `AIChatHandler.completions` 两条核心路径，**必须先 impact 再动手**。
+
+```java
+// 步骤 1：impact 评估两条最关键的代码路径
+impact({
+  target: "EmbeddingHandler.embeddingDocument",
+  direction: "upstream",
+  summaryOnly: true
+});  // ⚠️ 该方法被所有 embedding 入口调用，预期风险等级 HIGH 或以上
+
+impact({
+  target: "AIChatHandler.completions",
+  direction: "upstream",
+  summaryOnly: true
+});  // 该方法被所有聊天入口调用 + 集成 Tool/MCP，预期风险等级 HIGH
+```
+
+> 若 impact 返回 CRITICAL 或受影响 process 流 > 5，则**建议把 Phase 1 拆成 P1.1 / P1.2 两个子 PR**：
+> - P1.1：仅改动 `EmbeddingHandler.searchEmbedding` 路径（**只读，不动写入**），加 HYBRID + UUIDv7 主键只涉及新 chunk 写入路径，影响面小
+> - P1.2：新增 `GbIntentExtractor` 接口 + §4.3.4 Fallback（独立新文件，不动既有方法，blast radius = 0）
+
+### 5.2 Phase 回滚矩阵（原文档未明确，**v3 补全**）
+
+| Phase | 主变更 | Kill Switch（1 行回滚） | 回滚耗时 | 数据回滚必要性 |
+|-------|--------|----------------------|---------|--------------|
+| **P1.1** HYBRID + UUIDv7 主键 | 新建索引、向量库 searchMode 改 HYBRID | 配置项 `jeecg.airag.know.hybrid-search=false` | < 1 分钟 | **不需要**：新 schema，老 chunk 用 UUIDv4 仍可读 |
+| **P1.2** LLM 意图解析器 + Fallback | 新增 `GbIntentExtractor` 接口 + 调用 `extractWithFallback` | 配置项 `jeecg.airag.know.llm-intent-enabled=false` | < 5 分钟 | **不需要**：新增组件不影响存量 |
+| **P2** Tool Calling + VLM + 极性 + 审计 | 新增 Tool、ImageDescriber、Polarity 处理 | Feature flag `tools.enabled=false` / `image-describer.enabled=false` | < 10 分钟 | 审计表可不清空（用 start_time 区分） |
+| **P3** GraphRAG + ColPali | 引入 Python 微服务 + pgvector 多向量列 | 卸载 Python 微服务、保留字段不删除 | < 30 分钟 | 图谱数据非主路径，回滚后不影响 RAG 基础能力 |
+| **P4** RAGAS 评测 + 监控 | 独立跑批，不动主链路 | 关闭 cron job + 删除监控面板 | < 5 分钟 | **不需要**：纯旁路 |
+
+### 5.3 Flyway 迁移脚本案例（P1.1 必备，**v3 补全**）
+
+```sql
+-- 文件位置：jeecg-module-system/jeecg-system-start/src/main/resources/flyway/sql/postgresql/
+-- V20260710__gb_chunks_uuid_v7.sql  ← 注意：项目原 flyway 目录命名格式是日期+
+
+-- V20260710.1 —— 启用 PG 18 必扩展 + 创建 gb_chunks 表（UUIDv7 主键 + Skip Scan 多列索引）
+-- update-begin---author:song ---date:2026-07-10  for：【AI知识库】PG 18 必备扩展 + UUIDv7 主键 + Skip Scan 多列索引-------
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- textSearchConfig='simple' 全文索引所需（即使 simple 词典，pg_trgm 也加速 LIKE）
+
+-- 假定已有 chunk 表为 airag_embedding（gb_no 暂用 doc_id 字段占位，正式命名按 airag_knowledge 表约定）
+CREATE INDEX IF NOT EXISTS idx_airag_embedding_chunk_filter
+    ON airag_embedding (chapter, test_type, n_cells_alias, clause_id, amendment, status);
+-- PG 18 Skip Scan 自动生效：WHERE test_type='overcharge'（跳过 chapter）仍走索引
+
+-- 若 airag_embedding 主键不是 uuid，可补一列（不强求重写存量）：
+ALTER TABLE airag_embedding
+    ADD COLUMN IF NOT EXISTS chunk_uuid UUID DEFAULT uuidv7();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_airag_embedding_uuid ON airag_embedding (chunk_uuid);
+-- update-end---author:song ---date:2026-07-10  for：【AI知识库】PG 18 必备扩展 + UUIDv7 主键 + Skip Scan 多列索引-------
+```
+
+```sql
+-- V20260710.2 —— 数值结构化 + PG 18 虚拟生成列（对应 §4.11）
+-- update-begin---author:song ---date:2026-07-10  for：【AI知识库】数值参数表 + Virtual Generated Columns-------
+CREATE TABLE IF NOT EXISTS gb_param (
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    gb_no VARCHAR,
+    n_cells INT,
+    capacity_wh NUMERIC,
+    pack_type VARCHAR,
+    overcharge_threshold NUMERIC GENERATED ALWAYS AS (n_cells * 6.0) VIRTUAL,
+    undervoltage_threshold NUMERIC GENERATED ALWAYS AS (n_cells * 2.5) VIRTUAL,
+    rate_current_c3 NUMERIC GENERATED ALWAYS AS (capacity_wh / 3.0) VIRTUAL,
+    version VARCHAR,
+    effective_date DATE,
+    amendment VARCHAR,
+    source_chunk_id UUID  -- 反查向量库
+);
+CREATE INDEX IF NOT EXISTS idx_gb_threshold ON gb_param (overcharge_threshold);
+-- update-end---author:song ---date:2026-07-10  for：【AI知识库】数值参数表 + Virtual Generated Columns-------
+```
+
+> **迁移规范**：Flyway 必须按版本号顺序执行；本文件命名应遵循原 jeecg-boot 项目 `db/jeecgboot-mysql-5.7.sql` + flyway `202512/` 的目录规范（具体路径见 `jeecg-boot/CLAUDE.md` 中关于 Flyway 的章节）。
+
 ---
 
 ## 6. v1 → v2 关键事实修正日志
@@ -731,6 +864,7 @@ ingestor.ingest(documents);  // 自动产出 question 嵌入 + ground-truth 段�
 | 5 | ColPali 引用为 `anthology-engine/chromadb`（**错误仓库**） | 修正为 `illuin-tech/colpali`，论文 arxiv:2407.01449 | https://github.com/illuin-tech/colpali |
 | 6 | GraphRAG 描述模糊 | 给出官方仓库 + 论文 ID + 安装命令 | https://github.com/microsoft/graphrag |
 | 7 | v2 假设 chat model 是 Qwen2.5-7B-instruct + DeepSeek-reasoner 推理 + 独立 Qwen-VL 多模态 | **生产对齐**：chat model 改为 `MiniMax-M3`（多模态，OpenAI 兼容端点 `https://api.minimax.chat/v1`）；VLM 改为复用 MiniMax-M3 自身；删除 DeepSeek-reasoner 相关假设 | 用户生产配置：模型 MiniMax-M3、端点 api.minimax.chat/v1、text-embedding-v3 |
+| 8 | v2 文档未把 GitNexus 工作流门禁显式编入 | **v3 补全**：在 §2.5 新增 GitNexus 工作流门禁；§3 架构新增 L0 层；§5 Phase 1 加入 pre-flight 步骤 + 子 PR 拆分建议；新增 §5.2 Phase 回滚矩阵；新增 §5.3 Flyway 迁移脚本案例 | 项目根 CLAUDE.md "GitNexus — Code Intelligence" 段（仓库管理员已升级为强制规则） |
 
 ---
 
@@ -792,6 +926,7 @@ ingestor.ingest(documents);  // 自动产出 question 嵌入 + ground-truth 段�
 | 算术工具 | exp4j 表达式引擎 | PG 18 虚拟生成列 | **v2：PG 18 虚拟生成列（数据驱动）** | 让数据库做计算，LLM 只解释 |
 | 时间主键 | UUIDv4（v1） | UUIDv7（PG 18 新） | **v2：UUIDv7（实测 PG 18 已发布）** | 时间有序索引友好 |
 | 评测框架 | RAGAS | DeepEval / LangSmith | **RAGAS（首选）** | 开源、自托管、与 LangChain4j 集成最简 |
+| **代码变更验证** | 手动跑测试 | Sonar / 人工 review | **v3：GitNexus impact + detect_changes**（强制） | 项目根 CLAUDE.md 强制；HIGH/CRITICAL 必须 warn |
 
 ---
 
