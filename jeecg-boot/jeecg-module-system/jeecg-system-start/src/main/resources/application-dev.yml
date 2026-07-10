@@ -187,9 +187,9 @@ jeecg:
   # AI集成
   ai-chat:
     enabled: true
-    model: deepseek-v4-pro
-    apiKey: ??
-    apiHost: https://api.deepseek.com/v1
+    model: MiniMax-M3
+    apiKey: sk-cp-sGnWbZ2iZwengHTCBAI-vZOT0vx5ldhNTB1n3vnZwA-De5X73dBFFzcSy7M5jRZH63nRfqWhAIjP4wZxiqbcBACJlKZltUDcXOd89D9NXMiJxN1XnGOkgdA
+    apiHost: https://api.minimaxi.com/v1
     timeout: 60
     skills-dir:
     skills-shell-dir:
@@ -233,8 +233,8 @@ jeecg:
     # 默认向量模型
     ai-model-embed:
       provider: QWEN
-      model: text-embedding-v1
-      apiKey: sk-??
+      model: text-embedding-v3
+      apiKey: sk-cp-cLhJx59TYcXNI8xJ0FW9W2UMnXZfXRavMGr7Eo8PCR9ZtLiwcJRwOMLoYHe02KL6l7bS0Vad2twzP63gC0PMEqRok3KZ3Mvub3eOy-LBdN2H6UCe0qWZyCM
       apiHost: https://dashscope.aliyuncs.com/api/v1/services/
       timeout: 60
   # AIRag向量库
@@ -246,7 +246,7 @@ jeecg:
       port: 5432
       database: vector_db
       user: postgres
-      password: postgres
+      password: root
       table: embeddings
     # Brave Search 联网检索（AI Agent 工具）
     brave-search:
@@ -254,6 +254,31 @@ jeecg:
       endpoint: https://api.search.brave.com/res/v1/web/search
       count: 10
       timeout: 15
+  # AI知识库 MinerU 文档解析配置
+  airag:
+    know:
+      # 是否启用 MinerU 解析
+      enable-miner-u: true
+      # conda 环境名（本地模式使用）
+      conda-env:
+      # MinerU 运行模式：local=本地 magic-pdf 命令，cloud=官方 API
+      miner-u:
+        mode: cloud
+        cloud:
+          # 官方 API 基地址
+          base-url: https://mineru.net
+          # 官方 API Key（Bearer Token，cloud 模式必填）
+          api-key: eyJ0eXBlIjoiSldUIiwiYWxnIjoiSFM1MTIifQ.eyJqdGkiOiI0NTgwMDczOSIsInJvbCI6IlJPTEVfUkVHSVNURVIiLCJpc3MiOiJPcGVuWExhYiIsImlhdCI6MTc4MzU4MzA3NiwiY2xpZW50SWQiOiJsa3pkeDU3bnZ5MjJqa3BxOXgydyIsInBob25lIjoiIiwib3BlbklkIjpudWxsLCJ1dWlkIjoiZDI2MGZiNDMtZjJlZi00MmIxLWI3NGYtYzc0ZjE1YjNmZDhjIiwiZW1haWwiOiIiLCJleHAiOjE3OTEzNTkwNzZ9.8DdDKY2zvMH4uSR5WOTNG3prTtKH9wLA4GK8HjaohJCW1zgztvuhyrTZE03la7UjekmlvqMnK8NAqIqBvVQGWA
+          # 连接超时（秒）
+          connect-timeout: 10
+          # 读取超时（秒）
+          read-timeout: 60
+          # 单次解析总超时（秒）
+          timeout: 300
+          # 轮询结果最大次数
+          retry-times: 60
+          # 轮询结果间隔（秒）
+          retry-interval: 2
   #  Unipush配置 云函数调用 URL 化地址
   unicloud:
     pushUrl:

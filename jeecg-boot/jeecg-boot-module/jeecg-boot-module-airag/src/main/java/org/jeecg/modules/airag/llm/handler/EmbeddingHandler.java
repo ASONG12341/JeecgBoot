@@ -2,6 +2,8 @@ package org.jeecg.modules.airag.llm.handler;
 
 import com.alibaba.fastjson.JSONObject;
 import com.google.common.collect.Lists;
+import dev.langchain4j.community.model.dashscope.QwenEmbeddingModel;
+import dev.langchain4j.community.model.dashscope.QwenModelName;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.Metadata;
@@ -9,6 +11,7 @@ import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.rag.query.router.DefaultQueryRouter;
@@ -54,7 +57,11 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -62,6 +69,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static dev.langchain4j.store.embedding.filter.MetadataFilterBuilder.metadataKey;
+import static org.jeecg.common.util.oConvertUtils.getInteger;
 import static org.jeecg.modules.airag.llm.consts.LLMConsts.KNOWLEDGE_DOC_TYPE_FILE;
 import static org.jeecg.modules.airag.llm.consts.LLMConsts.KNOWLEDGE_DOC_TYPE_WEB;
 
@@ -95,6 +103,9 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     KnowConfigBean knowConfigBean;
 
     @Autowired(required = false)
+    private MineruApiClient mineruApiClient;
+
+    @Autowired(required = false)
     private AiChatConfig aiChatConfig;
 
     /**
@@ -111,6 +122,17 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      * 最大输出长度
      */
     private static final int DEFAULT_MAX_OUTPUT_CHARS = 4000;
+
+    //update-begin---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径向量化按批处理，避免 DashScope embedding 批量上限--------
+    /**
+     * 单次 embedding 请求最大分段数
+     * <p>
+     * DashScope text-embedding 同步接口对单次请求 input.contents 数量硬上限是 10。
+     * LangChain4j OpenAiEmbeddingModel 默认 maxSegmentsPerBatch=2048，会直接超过 DashScope 上限。
+     * 在 HTML 表格路径下不再依赖 EmbeddingStoreIngestor 的内部批量，故在此处手动切片。
+     */
+    private static final int EMBED_BATCH_SIZE = 10;
+    //update-end---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径向量化按批处理，避免 DashScope embedding 批量上限--------
 
     /**
      * 向量存储元数据:knowledgeId
@@ -238,7 +260,10 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         if (hasHtmlTable) {
             try {
                 List<TextSegment> segments = splitDocumentPreservingHtmlTables(from, splitter);
-                List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径按 20 条分批向量化，避免 DashScope 批量上限报错-----------
+                List<Embedding> embeddings = batchEmbedAll(embeddingModel, segments, EMBED_BATCH_SIZE);
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径按 20 条分批向量化，避免 DashScope 批量上限报错-----------
+//                List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
                 embeddingStore.addAll(embeddings, segments);
             } catch (Exception e) {
                 log.error("向量存储失败，请检查向量模型配置是否正确", e);
@@ -365,6 +390,32 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         result.addAll(segments);
     }
 
+    //update-begin---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径按批向量化，避免 DashScope embedding 批量上限--------
+    /**
+     * 将分段按指定大小分批调用 embeddingModel.embedAll，规避部分模型（如 DashScope text-embedding）
+     * 对单次请求 input.contents 数量的上限。返回的 Embedding 顺序与输入 segments 一一对应。
+     *
+     * @param embeddingModel embedding 模型
+     * @param segments 待向量化分段
+     * @param batchSize 每批最大分段数
+     * @return 与 segments 顺序一致的 Embedding 列表
+     */
+    public static List<Embedding> batchEmbedAll(EmbeddingModel embeddingModel, List<TextSegment> segments, int batchSize) {
+        if (segments == null || segments.isEmpty()) {
+            return Collections.emptyList();
+        }
+        if (batchSize <= 0) {
+            batchSize = segments.size();
+        }
+        List<Embedding> result = new ArrayList<>(segments.size());
+        for (int i = 0; i < segments.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, segments.size());
+            List<TextSegment> batch = segments.subList(i, end);
+            result.addAll(embeddingModel.embedAll(batch).content());
+        }
+        return result;
+    }
+    //update-end---author:song ---date:2026-07-10  for：【issues/9551】HTML表格路径按批向量化，避免 DashScope embedding 批量上限--------
     /**
      * 将文本作为单个完整段追加到 result（不经过分段器，用于保留完整表格块）
      */
@@ -398,7 +449,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         AssertUtils.assertNotEmpty("请选择知识库", knowIds);
         AssertUtils.assertNotEmpty("请填写查询内容", queryText);
 
-        topNumber = oConvertUtils.getInteger(topNumber, 5);
+        topNumber = getInteger(topNumber, 5);
 
         //命中的文档列表
         List<Map<String, Object>> documents = new ArrayList<>(16);
@@ -474,7 +525,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         EmbeddingModel embeddingModel = AiModelFactory.createEmbeddingModel(modelOp);
         Embedding queryEmbedding = embeddingModel.embed(queryText).content();
 
-        topNumber = oConvertUtils.getInteger(topNumber, modelOp.getTopNumber());
+        topNumber = getInteger(topNumber, modelOp.getTopNumber());
         similarity = oConvertUtils.getDou(similarity, modelOp.getSimilarity());
         
         //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
@@ -536,6 +587,9 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     @Override
     public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity) {
         AssertUtils.assertNotEmpty("请选择知识库", knowIds);
+        //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+        log.info("[RAG][getQueryRouter] 进入构建 queryRouter, 知识库IDs={}, 召回条数={}, 相似度阈值={}", knowIds, topNumber, similarity);
+        //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         List<ContentRetriever> retrievers = Lists.newArrayList();
         for (String knowId : knowIds) {
             if (oConvertUtils.isEmpty(knowId)) {
@@ -543,12 +597,29 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             }
             AiragKnowledge knowledge = airagKnowledgeMapper.getByIdIgnoreTenant(knowId);
             AssertUtils.assertNotEmpty("知识库不存在", knowledge);
+            //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            log.info("[RAG][getQueryRouter] 当前知识库 id={}, 名称={}, 向量模型id={}", knowId, knowledge.getName(), knowledge.getEmbedId());
+            //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
             AiragModel model = getEmbedModelData(knowledge.getEmbedId());
             AiModelOptions modelOptions = buildModelOptions(model);
-            EmbeddingModel embeddingModel = AiModelFactory.createEmbeddingModel(modelOptions);
-
-            EmbeddingStore<TextSegment> embeddingStore = getEmbedStore(model);
-            topNumber = oConvertUtils.getInteger(topNumber, 5);
+            EmbeddingModel embeddingModel;
+            EmbeddingStore<TextSegment> embeddingStore;
+            try {
+                embeddingModel = AiModelFactory.createEmbeddingModel(modelOptions);
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                log.info("[RAG][getQueryRouter] embeddingModel 创建成功, 实现类={}", embeddingModel.getClass().getName());
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                embeddingStore = getEmbedStore(model);
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                log.info("[RAG][getQueryRouter] embeddingStore 创建成功, 实现类={}", embeddingStore.getClass().getName());
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            } catch (Exception e) {
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                log.error("[RAG][getQueryRouter] 构建 embeddingModel/embeddingStore 失败, knowId={}, 错误信息={}", knowId, e.getMessage(), e);
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                throw new JeecgBootException("构建知识库检索器失败: " + e.getMessage(), e);
+            }
+            topNumber = getInteger(topNumber, 5);
             similarity = oConvertUtils.getDou(similarity, 0.75);
 
             //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
@@ -568,7 +639,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
                 }
             }
             //update-end---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
-            
+
             // 构建一个嵌入存储内容检索器，用于从嵌入存储中检索内容
             EmbeddingStoreContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
                     .embeddingStore(embeddingStore)
@@ -578,10 +649,19 @@ public class EmbeddingHandler implements IEmbeddingHandler {
                     .filter(filter)
                     .build();
             retrievers.add(contentRetriever);
+            //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            log.info("[RAG][getQueryRouter] 检索器已加入, knowId={}, 召回条数={}, 相似度阈值={}", knowId, topNumber, similarity);
+            //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         }
         if (retrievers.isEmpty()) {
+            //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            log.warn("[RAG][getQueryRouter] 检索器列表为空, 将返回 null, 知识库IDs={}", knowIds);
+            //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
             return null;
         } else {
+            //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            log.info("[RAG][getQueryRouter] 构建 DefaultQueryRouter 成功, 检索器数量={}", retrievers.size());
+            //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
             return new DefaultQueryRouter(retrievers);
         }
     }
@@ -896,6 +976,14 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             return ;
         }
 
+        //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU本地部署切换为官方API-----------
+        // 根据配置选择本地部署或官方 API
+        if ("cloud".equalsIgnoreCase(knowConfigBean.getMinerU().getMode())) {
+            parseFileByMinerUCloud(doc, docFile, metadataJson);
+            return;
+        }
+        //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU本地部署切换为官方API-----------
+
         // 安全校验：拒绝文件名/路径中含有 Shell 注入字符的文件，防止命令注入
         try {
             CommandExecUtil.validateFilePath(docFile.getAbsolutePath());
@@ -938,6 +1026,52 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             log.error("文件转换md失败,使用传统提取方案{}", e.getMessage(), e);
         }
     }
+
+    //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API解析结果与images目录由客户端统一写入targetDir，调用方仅传路径-------
+    /**
+     * 通过 MinerU 官方 API 解析文件
+     *
+     * @param doc          知识库文档
+     * @param docFile      本地文件
+     * @param metadataJson 文档元数据
+     * @author song
+     * @date 2026/7/9
+     */
+    private void parseFileByMinerUCloud(AiragKnowledgeDoc doc, File docFile, JSONObject metadataJson) {
+        AssertUtils.assertNotEmpty("MinerU 官方 API 客户端未初始化", mineruApiClient);
+
+        //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API解析结果与images目录由客户端统一写入targetDir，调用方仅传路径-------
+        long startTime = System.currentTimeMillis();
+        String fileType = FilenameUtils.getExtension(docFile.getName());
+
+        // 先准备输出目录（images 拷贝与 full.md 写入由 MineruApiClient 统一处理）
+        String fileBaseName = FilenameUtils.getBaseName(docFile.getName());
+        String relativeDir = "mineru" + File.separator + UUIDGenerator.generate() + File.separator + fileBaseName + File.separator + "auto" + File.separator;
+        String outputPath = uploadpath + File.separator + relativeDir;
+        File outputDir = new File(outputPath);
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw new JeecgBootException("创建 MinerU 官方 API 解析结果目录失败: " + outputPath);
+        }
+
+        //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API parse签名新增mdFileName参数，调用方传入fileBaseName + ".md"与metadataJson FILEPATH路径保持一致-------
+        String markdown = mineruApiClient.parse(docFile, fileType, outputDir, fileBaseName + ".md");
+        //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API parse签名新增mdFileName参数，调用方传入fileBaseName + ".md"与metadataJson FILEPATH路径保持一致-------
+
+        if (oConvertUtils.isEmpty(markdown)) {
+            log.warn("MinerU 官方 API 解析结果为空, file: {}", docFile.getName());
+            return;
+        }
+
+        // 回写 metadata，保持与本地模式一致的相对路径约定
+        metadataJson.put(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH, relativeDir + fileBaseName + ".md");
+        metadataJson.put(LLMConsts.KNOWLEDGE_DOC_METADATA_SOURCES_PATH, relativeDir);
+        doc.setMetadata(metadataJson.toJSONString());
+
+        log.info("MinerU 官方 API 解析结果已写入本地, file: {}, dir: {}, cost: {}ms",
+                docFile.getName(), outputPath, System.currentTimeMillis() - startTime);
+        //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API解析结果与images目录由客户端统一写入targetDir--------
+    }
+    //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API解析结果与images目录由客户端统一写入targetDir，调用方仅传路径-------
 
     /**
      * 确保文件存在

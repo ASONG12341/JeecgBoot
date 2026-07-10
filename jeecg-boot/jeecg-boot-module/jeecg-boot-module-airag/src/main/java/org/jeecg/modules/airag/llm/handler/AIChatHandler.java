@@ -342,9 +342,27 @@ public class AIChatHandler implements IAIChatHandler {
 
         // RAG
         List<String> knowIds = params.getKnowIds();
+        //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+        log.info("[RAG][mergeParams] AIChatParams 传入的 knowIds={}", knowIds);
+        //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         if (oConvertUtils.isObjectNotEmpty(knowIds)) {
-            QueryRouter queryRouter = embeddingHandler.getQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity());
-            params.setQueryRouter(queryRouter);
+            try {
+                QueryRouter queryRouter = embeddingHandler.getQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity());
+                params.setQueryRouter(queryRouter);
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                log.info("[RAG][mergeParams] queryRouter 已注入到 params, 类型={}",
+                        queryRouter == null ? "null" : queryRouter.getClass().getName());
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            } catch (Exception e) {
+                //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                log.error("[RAG][mergeParams] 构建 queryRouter 失败, knowIds={}, 错误信息={}", knowIds, e.getMessage(), e);
+                //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+                throw e;
+            }
+        } else {
+            //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
+            log.warn("[RAG][mergeParams] knowIds 为空, RAG 不会生效. modelName={}", airagModel.getModelName());
+            //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         }
 
         // 设置确保maxTokens值正确

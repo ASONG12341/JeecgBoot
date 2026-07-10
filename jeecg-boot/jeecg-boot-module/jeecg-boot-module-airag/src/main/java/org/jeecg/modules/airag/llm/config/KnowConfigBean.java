@@ -28,4 +28,74 @@ public class KnowConfigBean {
      */
     private String condaEnv = null;
 
+    //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU本地部署切换为官方API-----------
+    /**
+     * MinerU 配置（支持本地部署与官方 API 切换）
+     */
+    private MineruConfig minerU = new MineruConfig();
+
+    /**
+     * MinerU 配置
+     */
+    @Data
+    @NoArgsConstructor
+    public static class MineruConfig {
+
+        /**
+         * 运行模式：local=本地 magic-pdf 命令，cloud=官方 API
+         */
+        private String mode = "local";
+
+        /**
+         * 官方 API 配置
+         */
+        private CloudConfig cloud = new CloudConfig();
+    }
+
+    //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API CloudConfig 字段语义注释补齐-----------
+    /**
+     * MinerU 官方 API 配置
+     */
+    @Data
+    @NoArgsConstructor
+    public static class CloudConfig {
+
+        /**
+         * 官方 API 基地址，默认 https://mineru.net
+         */
+        private String baseUrl = "https://mineru.net";
+
+        /**
+         * 官方 API Key（Bearer Token，cloud 模式必填）
+         */
+        private String apiKey;
+
+        /**
+         * HTTP 连接超时（秒），默认 10
+         */
+        private int connectTimeout = 10;
+
+        /**
+         * HTTP 读取超时（秒），默认 60；每次轮询单独计时
+         */
+        private int readTimeout = 60;
+
+        /**
+         * 单次解析总等待上限（秒），默认 300；实际生效，与 retryTimes*retryInterval 取较小者
+         */
+        private int timeout = 300;
+
+        /**
+         * 轮询最大次数，默认 60；仅作语义提示，最终以 timeout 为准
+         */
+        private int retryTimes = 60;
+
+        /**
+         * 轮询结果间隔（秒），默认 2
+         */
+        private int retryInterval = 2;
+    }
+    //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API CloudConfig 字段语义注释补齐-----------
+    //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU本地部署切换为官方API-----------
+
 }
