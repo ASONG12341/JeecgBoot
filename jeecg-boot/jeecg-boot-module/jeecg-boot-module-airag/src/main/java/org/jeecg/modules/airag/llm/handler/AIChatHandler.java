@@ -19,7 +19,10 @@ import org.jeecg.config.AiChatConfig;
 import org.jeecg.config.AiRagConfigBean;
 import org.jeecg.modules.airag.common.consts.AiragConsts;
 import org.jeecg.modules.airag.common.handler.AIChatParams;
+import org.jeecg.modules.airag.common.handler.GbQueryIntent;
 import org.jeecg.modules.airag.common.handler.IAIChatHandler;
+import org.jeecg.modules.airag.common.handler.IGbIntentExtractor;
+import org.jeecg.modules.airag.common.handler.IntentContext;
 import org.jeecg.modules.airag.common.handler.McpToolProviderWrapper;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
 import org.jeecg.modules.airag.llm.entity.AiragMcp;
@@ -69,7 +72,12 @@ public class AIChatHandler implements IAIChatHandler {
 
     @Autowired
     private AiChatConfig aiChatConfig;
-    
+
+    // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】AIChatHandler 注入 IGbIntentExtractor（v3.1 §4.3.4 要求在 mergeParams 同步抽取 intent）-----------
+    @Autowired
+    private IGbIntentExtractor gbIntentExtractor;
+    // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】AIChatHandler 注入 IGbIntentExtractor（v3.1 §4.3.4 要求在 mergeParams 同步抽取 intent）-----------
+
     /**
      * 问答
      *
@@ -122,24 +130,35 @@ public class AIChatHandler implements IAIChatHandler {
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
+
+        // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏-----------
         String resp = null;
         try {
-            resp = llmHandler.completions(messages, params);
-        } catch (ToolExecutionException e) {
-            // 工具调用执行失败：先用 matchErrorMsg 翻译 cause，再拼装友好提示
-            String causeMsg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
-            causeMsg = matchErrorMsg(causeMsg, causeMsg);
-            log.error("AI工具执行异常 - {}", causeMsg, e);
-            return "";
-        } catch (Exception e) {
-            throw translateLlmException(e, "调用大模型接口失败，详情请查看后台日志。");
+            extractAndCacheIntent("completions", messages, params);
+            try {
+                resp = llmHandler.completions(messages, params);
+            } catch (ToolExecutionException e) {
+                // 工具调用执行失败：先用 matchErrorMsg 翻译 cause，再拼装友好提示
+                String causeMsg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                causeMsg = matchErrorMsg(causeMsg, causeMsg);
+                log.error("AI工具执行异常 - {}", causeMsg, e);
+                return "";
+            } catch (Exception e) {
+                throw translateLlmException(e, "调用大模型接口失败，详情请查看后台日志。");
+            }
+            if (resp != null && resp.contains("</think>")
+                    && (null == params.getNoThinking() || params.getNoThinking())) {
+                String[] thinkSplit = resp.split("</think>");
+                resp = thinkSplit[thinkSplit.length - 1];
+            }
+            return resp;
+        } finally {
+            IntentContext.clear();
+            // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions finally 关闭 MCP 连接（防御式：即使 llmHandler 内部已关闭也幂等；防止 MCP 客户端连接泄漏）-----------
+            closeMcpConnections(params);
+            // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions finally 关闭 MCP 连接（防御式：即使 llmHandler 内部已关闭也幂等；防止 MCP 客户端连接泄漏）-----------
         }
-        if (resp != null && resp.contains("</think>")
-                && (null == params.getNoThinking() || params.getNoThinking())) {
-            String[] thinkSplit = resp.split("</think>");
-            resp = thinkSplit[thinkSplit.length - 1];
-        }
-        return resp;
+        // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏-----------
     }
 
     /**
@@ -211,7 +230,18 @@ public class AIChatHandler implements IAIChatHandler {
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
-        return llmHandler.chat(messages, params);
+
+        // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏（流式返回 TokenStream，clear 在流启动前）；同步关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会）-----------
+        try {
+            extractAndCacheIntent("chat", messages, params);
+            return llmHandler.chat(messages, params);
+        } finally {
+            IntentContext.clear();
+            // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat finally 关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会；流式消费完成后的连接关闭依赖 llmHandler 内部 / 后续 P1.3 阶段处理）-----------
+            closeMcpConnections(params);
+            // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat finally 关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会；流式消费完成后的连接关闭依赖 llmHandler 内部 / 后续 P1.3 阶段处理）-----------
+        }
+        // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏（流式返回 TokenStream，clear 在流启动前）；同步关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会）-----------
     }
 
     //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
@@ -405,6 +435,117 @@ public class AIChatHandler implements IAIChatHandler {
 
         return params;
     }
+
+    // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】extractLastUserQuery 辅助方法 + extractAndCacheIntent 统一方法（DRY 重构：completions + chat 共享）-----------
+    /**
+     * 从 messages 列表中提取最后一条 user message 的文本（review 优化 1：用 ListIterator 从尾部遍历，比索引 for-loop 更 Java 风格）
+     */
+    private String extractLastUserQuery(List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return null;
+        }
+        var it = messages.listIterator(messages.size());
+        while (it.hasPrevious()) {
+            ChatMessage msg = it.previous();
+            if (msg instanceof UserMessage um) {
+                return um.singleText();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 统一 intent 抽取方法（DRY 重构，v3.1 P1.2）：从 messages 提取 userQuery，
+     * 调 IGbIntentExtractor.extractWithFallback，结果暂存 IntentContext（ThreadLocal）。
+     *
+     * 调用方（completions / chat）通过 caller 参数区分日志 tag。
+     * 失败不影响主流程（log warn 后继续；IntentContext 保持前次值或 null）。
+     *
+     * 触发条件（任一命中即静默返回）：
+     * 1. params.getKnowIds() 为空（无 RAG 上下文）
+     * 2. messages 为空（无用户输入）
+     * 3. 最后一条非 UserMessage
+     * 4. userQuery 全空白
+     * 5. userQuery 不包含 GB 标准号（review 风险 4：正则预检，避免无效 LLM 调用）
+     *
+     * 性能优化（review 风险 4）：
+     * - GB_PATTERN 正则预检：无 GB 标准号的问题直接跳过，节省一次 LLM Structured Output 调用（~200-500ms 延迟）
+     * - 短时缓存（userQuery+knowIds → intent，Caffeine TTL 5 分钟）：同类问题复用，
+     *   由 P1.3 阶段实施（需引入 Caffeine 或 Redis 依赖，超 P1.2 范围）
+     *
+     * @param caller   调用方标识（"completions" / "chat"）
+     * @param messages 当前 chat 的消息列表
+     * @param params   AIChatParams（含 knowIds）
+     */
+    /**
+     * GB 标准号正则预检（review 风险 4）。
+     * 匹配模式：GB 31241 / GB/T 31467.3 / GB 38031 / GB/T 36276 等。
+     */
+    private static final java.util.regex.Pattern GB_PATTERN = java.util.regex.Pattern.compile("GB[\\s/]*T?[\\s/]*\\d+(?:\\.\\d+)?(?:[-/]\\d+)?");
+
+    private void extractAndCacheIntent(String caller, List<ChatMessage> messages, AIChatParams params) {
+        List<String> knowIds = params.getKnowIds();
+        if (knowIds == null || knowIds.isEmpty()) {
+            return;
+        }
+        String userQuery = extractLastUserQuery(messages);
+        if (userQuery == null || userQuery.trim().isEmpty()) {
+            return;
+        }
+        // GB 标准号正则预检：无关问题跳过 LLM 调用（review 风险 4 性能优化）
+        if (!GB_PATTERN.matcher(userQuery).find()) {
+            log.debug("[RAG][{}] 用户问题未匹配到 GB 标准号（pattern={}），跳过 intent 抽取", caller, GB_PATTERN.pattern());
+            return;
+        }
+        try {
+            GbQueryIntent intent = gbIntentExtractor.extractWithFallback(userQuery, knowIds);
+            IntentContext.set(intent);
+            // review 优化 2：GbQueryIntent 已有 @Data 自动含 @ToString，直接用 {} 模板简化日志
+            log.info("[RAG][{}] intent 已抽取并暂存 IntentContext: intent={}, knowIds={}", caller, intent, knowIds);
+        } catch (Exception e) {
+            // intent 抽取失败不影响 chat 主流程；只 log warn，IntentContext 不更新
+            log.warn("[RAG][{}] intent 抽取失败, knowIds={}, 错误={}", caller, knowIds, e.getMessage());
+        }
+    }
+    // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】extractLastUserQuery 辅助方法 + extractAndCacheIntent 统一方法（DRY 重构：completions + chat 共享）-----------
+
+    // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】closeMcpConnections 防御式关闭（review 风险 2）：completions/chat finally 调用；幂等包装（多次 close 不抛异常）；失败隔离（单 wrapper 关闭失败不影响其他）-----------
+    /**
+     * 防御式关闭 MCP 连接（review 风险 2）。
+     *
+     * 调用方：completions / chat 的 finally 块。
+     * 设计：
+     * 1. 幂等：单 wrapper 多次 close 不抛异常（依赖 McpToolProviderWrapper.close() 实现）
+     * 2. 失败隔离：单个 wrapper 关闭失败不影响其他 wrapper；仅 log warn
+     * 3. null 安全：getMcpToolProviderWrappers() 返回 null 或空列表时静默跳过
+     *
+     * 流式场景的注意：chat() finally 在 llmHandler.chat() return 之前调用，
+     * 可能早于 TokenStream 消费完成。如 llmHandler 内部已 close则幂等；
+     * 否则依赖 llmHandler 在 TokenStream 生命周期内 close（后续 P1.3 阶段处理）。
+     *
+     * @param params AIChatParams（含 mcpToolProviderWrappers 列表）
+     */
+    private void closeMcpConnections(AIChatParams params) {
+        if (params == null) {
+            return;
+        }
+        List<McpToolProviderWrapper> wrappers = params.getMcpToolProviderWrappers();
+        if (wrappers == null || wrappers.isEmpty()) {
+            return;
+        }
+        for (McpToolProviderWrapper wrapper : wrappers) {
+            if (wrapper == null) {
+                continue;
+            }
+            try {
+                wrapper.close();
+            } catch (Exception e) {
+                log.warn("[AI-CHAT][MCP] 关闭 MCP 连接失败, type={}, 错误={}",
+                        wrapper.getClass().getSimpleName(), e.getMessage());
+            }
+        }
+    }
+    // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】closeMcpConnections 防御式关闭（review 风险 2）：completions/chat finally 调用；幂等包装（多次 close 不抛异常）；失败隔离（单 wrapper 关闭失败不影响其他）-----------
 
     /**
      * 构造插件和MCP工具
