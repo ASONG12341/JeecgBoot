@@ -44,5 +44,16 @@ public class GbQueryIntent implements Serializable {
 
     @Description("极性：true=用户问'能否/是否'；false=用户问'如何/怎么'")
     private Boolean isBooleanQuery;
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 1】GbQueryIntent 增加元数据字段 clauseId/amendment/status-----------
+    @Description("条款号，如 '9.2' / '8.3.1'；未提及则 null")
+    private String clauseId;
+
+    @Description("标准版次/修订年份，如 '2022'；未提及则 null")
+    private String amendment;
+
+    @Description("条款状态：current(现行) / superseded(废止)；未提及则 null")
+    private String status;
+    //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 1】GbQueryIntent 增加元数据字段 clauseId/amendment/status-----------
 }
 // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】GbQueryIntent POJO 定义，按 v3.1 §4.3.1（注解 @JsonPropertyDescription → @Description；LangChain4j 1.17.2 schema generator 仅识别 @Description）-----------
