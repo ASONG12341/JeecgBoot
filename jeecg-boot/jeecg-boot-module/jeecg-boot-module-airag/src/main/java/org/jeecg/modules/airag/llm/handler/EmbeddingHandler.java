@@ -5,6 +5,11 @@ import com.google.common.collect.Lists;
 import dev.langchain4j.community.model.dashscope.QwenEmbeddingModel;
 import dev.langchain4j.community.model.dashscope.QwenModelName;
 import dev.langchain4j.data.document.Document;
+//update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent + ExpandingQueryTransformer + RRF imports-------
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.rag.query.Query;
+import dev.langchain4j.rag.query.transformer.ExpandingQueryTransformer;
+//update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent + ExpandingQueryTransformer + RRF imports-------
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
@@ -23,6 +28,9 @@ import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.logical.And;
 import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
+//update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 8】PgVectorEmbeddingStore HYBRID 搜索支持--------
+import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore.SearchMode;
+//update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 8】PgVectorEmbeddingStore HYBRID 搜索支持--------
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FilenameUtils;
@@ -36,6 +44,7 @@ import java.nio.file.Paths;
 import org.jeecg.config.AiChatConfig;
 import org.jeecg.common.system.util.JwtUtil;
 import org.jeecg.common.util.*;
+import org.jeecg.modules.airag.common.handler.GbQueryIntent;
 import org.jeecg.modules.airag.common.handler.IEmbeddingHandler;
 import org.jeecg.modules.airag.common.vo.knowledge.KnowledgeSearchResult;
 import org.jeecg.modules.airag.llm.config.EmbedStoreConfigBean;
@@ -46,10 +55,12 @@ import org.jeecg.modules.airag.llm.document.WebPageParser;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledge;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
 import org.jeecg.modules.airag.llm.entity.AiragModel;
+import org.jeecg.modules.airag.llm.extractor.GbMetadataExtractor;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeMapper;
 import org.jeecg.modules.airag.llm.mapper.AiragModelMapper;
 import org.jeecg.modules.airag.llm.service.IAiragKnowledgeService;
 import org.jeecg.modules.airag.llm.splitter.CustomDocumentSplitter;
+import org.jeecg.modules.airag.llm.vo.GbMetadata;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -107,6 +118,19 @@ public class EmbeddingHandler implements IEmbeddingHandler {
 
     @Autowired(required = false)
     private AiChatConfig aiChatConfig;
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 7】embeddingDocument 注入 GbMetadataExtractor--------
+    @Autowired
+    private GbMetadataExtractor gbMetadataExtractor;
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 7】embeddingDocument 注入 GbMetadataExtractor--------
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】ExpandingQueryTransformer 懒初始化字段--------
+    /**
+     * 查询扩展器懒初始化缓存：首次启用 queryExpansion 时构建 ChatModel + ExpandingQueryTransformer。
+     * volatile + 双重检查锁，避免多线程重复构建。
+     */
+    private volatile ExpandingQueryTransformer expandingQueryTransformer;
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】ExpandingQueryTransformer 懒初始化字段--------
 
     /**
      * 默认分段长度
@@ -255,6 +279,18 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         }
         //update-end---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
         Document from = Document.from(content, metadata);
+        //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 7】提取 GB 结构化 metadata 并写入 Document（reference-share 模式：ingestor 与 HTML 两条路径都自动继承）-------
+        // 通过 from.metadata() 写入，因为 LangChain4j 的 Metadata 是引用共享的，
+        // splitter.split(doc) 产生的 TextSegment 都会带这些字段（无论走 ingestor 还是 splitDocumentPreservingHtmlTables）。
+        if (gbMetadataExtractor != null) {
+            try {
+                GbMetadata gbMetadata = gbMetadataExtractor.extractFromText(content);
+                gbMetadata.applyTo(from.metadata());
+            } catch (Exception e) {
+                log.warn("[GB-RAG P1.1] 提取 GB metadata 失败, 跳过 metadata 注入: {}", e.getMessage());
+            }
+        }
+        //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 7】提取 GB 结构化 metadata 并写入 Document（reference-share 模式：ingestor 与 HTML 两条路径都自动继承）-------
         //update-begin---author:wangshuai ---date:2026-04-20  for：【issues/9551】HTML表格分段时被截断，保留完整表格块-----------
         boolean hasHtmlTable = content != null && PATTERN_HTML_TABLE.matcher(content).find();
         if (hasHtmlTable) {
@@ -433,6 +469,97 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     }
     //update-end---author:wangshuai ---date:2026-04-20  for：【issues/9551】HTML表格分段时被截断，新增保留表格完整性的分段辅助方法-----------
 
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】查询扩展器懒加载（双重检查锁）--------
+    /**
+     * 懒加载 ExpandingQueryTransformer：首次调用时基于 embeddingModel 的 provider 构建 ChatModel，
+     * 后续所有扩展查询复用同一实例。注意：这里复用 embeddingModel 的 AiModelOptions 来构建 ChatModel；
+     * provider 必须支持 chat（OpenAI/Qwen/Zhipu/DeepSeek 等均可）。
+     */
+    private ExpandingQueryTransformer getExpandingQueryTransformer(AiragModel model) {
+        ExpandingQueryTransformer local = expandingQueryTransformer;
+        if (local != null) {
+            return local;
+        }
+        synchronized (this) {
+            if (expandingQueryTransformer != null) {
+                return expandingQueryTransformer;
+            }
+            AiModelOptions modelOp = buildModelOptions(model);
+            ChatModel chatModel = AiModelFactory.createChatModel(modelOp);
+            ExpandingQueryTransformer built = new ExpandingQueryTransformer(chatModel);
+            expandingQueryTransformer = built;
+            return built;
+        }
+    }
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】查询扩展器懒加载（双重检查锁）--------
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent → LangChain4j metadata Filter--------
+    /**
+     * 在已有 filter 上叠加 GbQueryIntent 的标量过滤条件。任一字段为空则跳过该子句。
+     */
+    private Filter buildMetadataFilter(Filter base, GbQueryIntent intent) {
+        Filter result = base;
+        if (intent == null) {
+            return result;
+        }
+        if (oConvertUtils.isNotEmpty(intent.getInferredChapter())) {
+            result = new And(result, metadataKey("chapter").isEqualTo(intent.getInferredChapter()));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getTestType())) {
+            result = new And(result, metadataKey("test_type").isEqualTo(intent.getTestType()));
+        }
+        if (intent.getNCells() != null) {
+            result = new And(result, metadataKey("n_cells_alias").isEqualTo(String.valueOf(intent.getNCells())));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getClauseId())) {
+            result = new And(result, metadataKey("clause_id").isEqualTo(intent.getClauseId()));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getAmendment())) {
+            result = new And(result, metadataKey("amendment").isEqualTo(intent.getAmendment()));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getStatus())) {
+            result = new And(result, metadataKey("status").isEqualTo(intent.getStatus()));
+        }
+        return result;
+    }
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent → LangChain4j metadata Filter--------
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】Multi-Query RRF 融合--------
+    /**
+     * 对多个扩展查询的召回结果做 RRF (Reciprocal Rank Fusion) 融合。
+     * key = docId + "_" + index（同一 chunk 在不同查询里应当被识别为同一个候选）。
+     */
+    private List<EmbeddingMatch<TextSegment>> rrfMerge(
+            List<EmbeddingMatch<TextSegment>> allMatches,
+            int topK) {
+        Map<String, EmbeddingMatch<TextSegment>> matchById = new LinkedHashMap<>();
+        Map<String, Double> scores = new HashMap<>();
+        int k = knowConfigBean != null ? knowConfigBean.getRrfK() : 60;
+
+        Map<String, List<EmbeddingMatch<TextSegment>>> byQuery = allMatches.stream()
+                .collect(Collectors.groupingBy(m -> m.embedded().text()));
+
+        byQuery.forEach((queryText, list) -> {
+            list.sort(Comparator.<EmbeddingMatch<TextSegment>>comparingDouble(EmbeddingMatch::score).reversed());
+            for (int rank = 0; rank < list.size(); rank++) {
+                dev.langchain4j.data.document.Metadata m = list.get(rank).embedded().metadata();
+                String docId = m.getString(EMBED_STORE_METADATA_DOCID);
+                String idx = m.getString("index");
+                String id = (docId == null ? "" : docId) + "_" + (idx == null ? String.valueOf(rank) : idx);
+                scores.merge(id, 1.0 / (k + rank + 1), Double::sum);
+                matchById.putIfAbsent(id, list.get(rank));
+            }
+        });
+
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(topK)
+                .map(e -> matchById.get(e.getKey()))
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】Multi-Query RRF 融合--------
+
     /**
      * 向量查询(多知识库)
      *
@@ -504,17 +631,27 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     }
 
     /**
-     * 向量查询
-     *
-     * @param knowId
-     * @param queryText
-     * @param topNumber
-     * @param similarity
-     * @return
-     * @author chenrui
-     * @date 2025/2/18 16:52
+     * 向量查询（4参，保留向后兼容：内部委托 5 参重载，intent=null）
      */
     public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity) {
+        return searchEmbedding(knowId, queryText, topNumber, similarity, null);
+    }
+
+    /**
+     * 向量查询（支持 GbQueryIntent 标量过滤 + HYBRID 模式下忽略 minScore + 可选 Multi-Query 扩展 + RRF 融合）
+     *
+     * @param knowId    知识库 ID
+     * @param queryText 查询文本
+     * @param topNumber 召回条数
+     * @param similarity 相似度阈值；HYBRID 模式下传 null（pgvector HYBRID 不支持 minScore 语义）
+     * @param intent    GB 查询意图（可为 null）；非 null 时叠加 chapter/test_type/n_cells_alias/clause_id/amendment/status 标量过滤
+     * @return 命中 chunks
+     * @author chenrui（4 参原版）
+     * @date 2025/2/18 16:52
+     * <p>P1.1 Task 9 by song-claude 2026-07-11</p>
+     */
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】searchEmbedding 新增 GbQueryIntent 重载-------
+    public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity, GbQueryIntent intent) {
         AssertUtils.assertNotEmpty("请选择知识库", knowId);
         AiragKnowledge knowledge = airagKnowledgeMapper.getByIdIgnoreTenant(knowId);
         AssertUtils.assertNotEmpty("知识库不存在", knowledge);
@@ -527,9 +664,12 @@ public class EmbeddingHandler implements IEmbeddingHandler {
 
         topNumber = getInteger(topNumber, modelOp.getTopNumber());
         similarity = oConvertUtils.getDou(similarity, modelOp.getSimilarity());
-        
+
         //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
         Filter filter = metadataKey(EMBED_STORE_METADATA_KNOWLEDGEID).isEqualTo(knowId);
+
+        // P1.1 Task 9: 叠加 GbQueryIntent 标量过滤
+        filter = buildMetadataFilter(filter, intent);
 
         // 记忆库的时候需要根据用户隔离
         if (LLMConsts.KNOWLEDGE_TYPE_MEMORY.equalsIgnoreCase(knowledge.getType())) {
@@ -542,20 +682,58 @@ public class EmbeddingHandler implements IEmbeddingHandler {
                 }
             } catch (Exception e) {
                 // ignore
-                log.info("构建过滤器异常,{}",e.getMessage());
+                log.info("构建过滤器异常,{}", e.getMessage());
             }
         }
         //update-end---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
-        
-        EmbeddingSearchRequest embeddingSearchRequest = EmbeddingSearchRequest.builder()
-                .queryEmbedding(queryEmbedding)
-                .maxResults(topNumber)
-                .minScore(similarity)
-                .filter(filter)
-                .build();
+
+        // P1.1 Task 9: HYBRID 模式下不传 minScore，因为 pgvector HYBRID 检索用 RRF 融合分数，不再使用单一相似度阈值
+        boolean hybridOn = knowConfigBean != null && knowConfigBean.isHybridSearch();
+        Double effectiveMinScore = hybridOn ? null : similarity;
 
         EmbeddingStore<TextSegment> embeddingStore = getEmbedStore(model);
-        List<EmbeddingMatch<TextSegment>> relevant = embeddingStore.search(embeddingSearchRequest).matches();
+
+        List<EmbeddingMatch<TextSegment>> relevant;
+        // P1.1 Task 9: 可选查询扩展（Multi-Query）→ 分别检索 → RRF 融合
+        if (knowConfigBean != null && knowConfigBean.isQueryExpansionEnabled()) {
+            try {
+                ExpandingQueryTransformer transformer = getExpandingQueryTransformer(model);
+                java.util.Collection<Query> expanded = transformer.transform(Query.from(queryText));
+                List<EmbeddingMatch<TextSegment>> merged = new ArrayList<>();
+                for (Query q : expanded) {
+                    Embedding qEmb = embeddingModel.embed(q.text()).content();
+                    EmbeddingSearchRequest qReq = EmbeddingSearchRequest.builder()
+                            .queryEmbedding(qEmb)
+                            .query(q.text())
+                            .maxResults(topNumber)
+                            .minScore(effectiveMinScore)
+                            .filter(filter)
+                            .build();
+                    merged.addAll(embeddingStore.search(qReq).matches());
+                }
+                relevant = rrfMerge(merged, topNumber);
+            } catch (Exception e) {
+                log.warn("[GB-RAG P1.1] 查询扩展失败，回退到单查询: {}", e.getMessage());
+                EmbeddingSearchRequest embeddingSearchRequest = EmbeddingSearchRequest.builder()
+                        .queryEmbedding(queryEmbedding)
+                        .query(queryText)
+                        .maxResults(topNumber)
+                        .minScore(effectiveMinScore)
+                        .filter(filter)
+                        .build();
+                relevant = embeddingStore.search(embeddingSearchRequest).matches();
+            }
+        } else {
+            EmbeddingSearchRequest embeddingSearchRequest = EmbeddingSearchRequest.builder()
+                    .queryEmbedding(queryEmbedding)
+                    .query(queryText)
+                    .maxResults(topNumber)
+                    .minScore(effectiveMinScore)
+                    .filter(filter)
+                    .build();
+            relevant = embeddingStore.search(embeddingSearchRequest).matches();
+        }
+
         List<Map<String, Object>> result = new ArrayList<>();
         if (oConvertUtils.isObjectNotEmpty(relevant)) {
             result = relevant.stream().map(matchRes -> {
@@ -573,6 +751,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         }
         return result;
     }
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】searchEmbedding 新增 GbQueryIntent 重载-------
 
     /**
      * 获取向量查询路由
@@ -586,6 +765,15 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      */
     @Override
     public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity) {
+        return getQueryRouter(knowIds, topNumber, similarity, null);
+    }
+
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------
+    /**
+     * 4参重载：构造 EmbeddingStoreContentRetriever 时传入 GbQueryIntent 的标量过滤，
+     * 以及 HYBRID 模式下不传 minScore。
+     */
+    public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, GbQueryIntent intent) {
         AssertUtils.assertNotEmpty("请选择知识库", knowIds);
         //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         log.info("[RAG][getQueryRouter] 进入构建 queryRouter, 知识库IDs={}, 召回条数={}, 相似度阈值={}", knowIds, topNumber, similarity);
@@ -624,6 +812,8 @@ public class EmbeddingHandler implements IEmbeddingHandler {
 
             //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
             Filter filter = metadataKey(EMBED_STORE_METADATA_KNOWLEDGEID).isEqualTo(knowId);
+            // P1.1 Task 9: 叠加 GbQueryIntent 标量过滤
+            filter = buildMetadataFilter(filter, intent);
             // 记忆库的时候需要根据用户隔离
             if (LLMConsts.KNOWLEDGE_TYPE_MEMORY.equalsIgnoreCase(knowledge.getType())) {
                 try {
@@ -640,12 +830,16 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             }
             //update-end---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
 
+            // P1.1 Task 9: HYBRID 模式下不传 minScore（pgvector HYBRID 走 RRF 融合分数）
+            boolean hybridOn = knowConfigBean != null && knowConfigBean.isHybridSearch();
+            Double effectiveMinScore = hybridOn ? null : similarity;
+
             // 构建一个嵌入存储内容检索器，用于从嵌入存储中检索内容
             EmbeddingStoreContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
                     .embeddingStore(embeddingStore)
                     .embeddingModel(embeddingModel)
                     .maxResults(topNumber)
-                    .minScore(similarity)
+                    .minScore(effectiveMinScore)
                     .filter(filter)
                     .build();
             retrievers.add(contentRetriever);
@@ -665,6 +859,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             return new DefaultQueryRouter(retrievers);
         }
     }
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------
 
     /**
      * 删除向量化文档
@@ -781,6 +976,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         }
         // update-end-----author:sunjianlei ---date:20250509  for：【QQYUN-12345】向量模型维度不一致问题
 
+        //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 8】PgVectorEmbeddingStore 根据开关启用 HYBRID-------
         EmbeddingStore<TextSegment> embeddingStore = PgVectorEmbeddingStore.builder()
                 // Connection and table parameters
                 .host(embedStoreConfigBean.getHost())
@@ -803,7 +999,12 @@ public class EmbeddingHandler implements IEmbeddingHandler {
                 .createTable(true)
                 //Don’t drop the table first (set to true if you want a fresh start)
                 .dropTableFirst(false)
+                // 检索模式由 KnowConfigBean 的 Kill Switch 控制，默认 VECTOR (行为与之前完全一致)
+                .searchMode(knowConfigBean != null && knowConfigBean.isHybridSearch() ? SearchMode.HYBRID : SearchMode.VECTOR)
+                .textSearchConfig(knowConfigBean != null ? knowConfigBean.getTextSearchConfig() : "simple")
+                .rrfK(knowConfigBean != null ? knowConfigBean.getRrfK() : 60)
                 .build();
+        //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 8】PgVectorEmbeddingStore 根据开关启用 HYBRID-------
         EMBED_STORE_CACHE.put(key, embeddingStore);
         return embeddingStore;
     }

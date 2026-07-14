@@ -348,23 +348,25 @@ public class GbSafeCalculator {
 @AllArgsConstructor
 public class GbQueryIntent {
 
-    @JsonPropertyDescription("测试类型枚举：过压充电 / 短路 / 挤压 / 高低温循环 / 针刺 / 跌落")
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P0 #2 @JsonPropertyDescription → @Description（LangChain4j 1.17.2 schema generator 仅识别 dev.langchain4j.model.output.structured.Description；@JsonPropertyDescription 会被静默丢弃；字节码证据：D:\maven\jeecgBoot\langchain4j-core-1.17.2.jar 的 JsonSchemaElementUtils.descriptionFrom(Field) 方法仅 getAnnotation(Description.class)）----------- -->
+    @Description("测试类型枚举：过压充电 / 短路 / 挤压 / 高低温循环 / 针刺 / 跌落")
     public String testType;
 
-    @JsonPropertyDescription("电池串数 n_cells。3S / 三串 / 三个电芯 一律抽取为 3；48V/3.7V≈13 则推导出 13（常识推理）")
+    @Description("电池串数 n_cells。3S / 三串 / 三个电芯 一律抽取为 3；48V/3.7V≈13 则推导出 13（常识推理）")
     public Integer nCells;
 
-    @JsonPropertyDescription("对象类型：cell(单体) / pack(电池组) / system(系统)")
+    @Description("对象类型：cell(单体) / pack(电池组) / system(系统)")
     public String objectType;
 
-    @JsonPropertyDescription("隐含推导的章号。基于对象类型推断：单体→7章，电池组→9章，系统→10章")
+    @Description("隐含推导的章号。基于对象类型推断：单体→7章，电池组→9章，系统→10章")
     public String inferredChapter;
 
-    @JsonPropertyDescription("环境条件，例如 '25±5℃' / 'T=40℃'；若未提及则 null")
+    @Description("环境条件，例如 '25±5℃' / 'T=40℃'；若未提及则 null")
     public String environmentCondition;
 
-    @JsonPropertyDescription("极性：true=用户问'能否/是否'；false=用户问'如何/怎么'")
+    @Description("极性：true=用户问'能否/是否'；false=用户问'如何/怎么'")
     public Boolean isBooleanQuery;
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P0 #2 @JsonPropertyDescription → @Description（LangChain4j 1.17.2 schema generator 仅识别 dev.langchain4j.model.output.structured.Description；@JsonPropertyDescription 会被静默丢弃；字节码证据：D:\maven\jeecgBoot\langchain4j-core-1.17.2.jar 的 JsonSchemaElementUtils.descriptionFrom(Field) 方法仅 getAnnotation(Description.class)）----------- -->
 }
 
 interface GbIntentExtractor {
@@ -419,22 +421,30 @@ GbQueryIntent intent = extractor.extract("我的3S电池包要做过充测试");
 
 ```java
 // update-begin---author:song ---date:2026-07-10  for：【GB检索】LLM 提取结果通过 PG 18 Skip Scan 多列过滤精召-------
-public Filter intentToPgFilter(GbQueryIntent intent) {
-    Filter f = metadataKey("status").isEqualTo("current");
-    if (intent.inferredChapter != null) {
-        f = new And(f, metadataKey("chapter").isEqualTo(intent.inferredChapter));
-    }
-    if (intent.testType != null) {
-        f = new And(f, metadataKey("test_type").isEqualTo(intent.testType));
-    }
-    if (intent.nCells != null) {
-        f = new And(f, metadataKey("n_cells_alias").isEqualTo(String.valueOf(intent.nCells)));
-    }
+public Filter intentToPgFilter(GbQueryIntent intent, String knowId) {
+    // 现状：EmbeddingHandler.embeddingDocument 仅写 docId/knowledgeId/docName/createTime/userName
+    //       （见 EmbeddingHandler.java lines 235-255）
+    // 当前实现仅按 knowledgeId 过滤；status / chapter / test_type filter 待 Phase 1 metadata 迁移完成后启用
+    // 字节码证据：D:\maven\jeecgBoot\langchain4j-core-1.17.2.jar
+    // 来源：批次 1 二审报告 P0 #3（v3 文档当前 metadata 不含 status，启用 status=current filter 必 0 召回）
+    Filter f = metadataKey("knowledgeId").isEqualTo(knowId);
     return f;
 }
 // 配合 PG 18 多列索引 idx_gb_chunk_meta (chapter, test_type, n_cells_alias, ...)
 // 即使先过 test_type、再过 chapter，Skip Scan 也会自动命中索引
 // update-end---author:song ---date:2026-07-10  for：【GB检索】LLM 提取结果通过 PG 18 Skip Scan 多列过滤精召-------
+
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P0 #3 Fallback 退化路径去除 status=current filter（实际 EmbeddingHandler.embeddingDocument 仅写 5 个 metadata 键，不含 status/chapter/test_type/n_cells_alias；当前数据上启用这些 filter 必 0 召回；待 Phase 1 metadata 迁移完成后恢复多列过滤）----------- -->
+// P0 #3 修订说明：
+// 1. 原方法签名 intentToPgFilter(GbQueryIntent intent) 改为 (GbQueryIntent intent, String knowId)
+//    新增 knowId 参数是过滤必需（当前 embedding store 无全局默认）
+// 2. 原 Filter f = metadataKey("status").isEqualTo("current"); 已移除
+//    原因：EmbeddingHandler.embeddingDocument 当前元数据写入不包含 status（见 EmbeddingHandler.java 行 235-255）
+// 3. chapter / test_type / n_cells_alias 三个 filter 也已移除（同样的 metadata 不存在原因）
+// 4. 恢复条件：Phase 1 metadata 迁移完成后，在 EmbeddingHandler.embeddingDocument 写入 status / chapter / test_type / n_cells_alias 字段
+//    然后恢复原代码（重命名 knowId 参数从外部传入或绑字段）
+// 5. 调用方（如 §4.3.4 extractWithFallback）需相应修改：传入 knowId
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P0 #3 Fallback 退化路径去除 status=current filter（实际 EmbeddingHandler.embeddingDocument 仅写 5 个 metadata 键，不含 status/chapter/test_type/n_cells_alias；当前数据上启用这些 filter 必 0 召回；待 Phase 1 metadata 迁移完成后恢复多列过滤）----------- -->
 ```
 
 **v1 → v2 关键差异**：
@@ -448,6 +458,16 @@ public Filter intentToPgFilter(GbQueryIntent intent) {
 > **设计哲学**：宁可退化为"不精确但能召回"，也不要因为 LLM 故障导致"精确但 0 召回"。
 > 验收标准：即便 LLM 服务完全宕机，召回链路仍可工作（退化为纯向量+全文混合检索）。
 
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #2 Fallback 触发条件枚举补充（JSON 解析失败 / Schema 不匹配 / ResponseFormat 不支持 / 返回 null 或空对象）----------- -->
+> **Fallback 触发条件**（任一命中即退化）：
+> 1. LLM 调用超时（`OpenAiChatModel.builder().timeout(Duration)`）
+> 2. LLM 调用 HTTP 4xx / 5xx 错误
+> 3. JSON 解析失败（模型返回非合法 JSON）
+> 4. Schema 不匹配（模型返回 JSON 但字段缺失 / 类型不符 POJO）
+> 5. ResponseFormat 不支持（端点未实现 `RESPONSE_FORMAT_JSON_SCHEMA`）
+> 6. 模型返回 null 或空对象
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #2 Fallback 触发条件枚举补充（JSON 解析失败 / Schema 不匹配 / ResponseFormat 不支持 / 返回 null 或空对象）----------- -->
+
 ```java
 // update-begin---author:song ---date:2026-07-10  for：【GB检索】LLM 意图解析 Fallback 机制，防止 LLM 超时导致 0 召回-------
 /**
@@ -457,22 +477,33 @@ public Filter intentToPgFilter(GbQueryIntent intent) {
  * 2. 退化路径不抛异常，对调用方透明
  * 3. 日志记录 fallback 触发条件，便于事后追因
  */
-public GbQueryIntent extractWithFallback(String userQuery) {
+public GbQueryIntent extractWithFallback(String userQuery, String knowId) {
     try {
         return extractor.extract(userQuery);                      // 主路径：LLM Structured Output
     } catch (Exception e) {
         log.warn("[GB检索] LLM 意图解析失败，降级到纯向量+全文检索: {}", e.getMessage());
         return GbQueryIntent.builder()
-                .testType(null)        // 全部字段为 null → intentToPgFilter() 只保留 status=current
+                .testType(null)        // 全部字段为 null → intentToPgFilter(knowId) 只保留 knowledgeId 基础过滤
                 .nCells(null)
                 .objectType(null)
                 .inferredChapter(null)
                 .environmentCondition(null)
                 .isBooleanQuery(null)
                 .build();
-        // 此时 §4.3.3 的 intentToPgFilter() 退化为：
-        //   Filter f = metadataKey("status").isEqualTo("current");
-        // 等价于无 LLM 元数据约束下的 PGVector HYBRID mode 召回 —— 不会 0 召回。
+        // 此时 §4.3.3 的 intentToPgFilter(intent, knowId) 退化为：
+        //   Filter f = metadataKey("knowledgeId").isEqualTo(knowId);
+        // 等价于无 LLM 元数据约束下的**纯向量召回**（PGVector HYBRID 模式依赖 Phase 1 P1.1 hybrid-search 落地后启用，详见 §4.1）
+        // 不会 0 召回（仅按 knowledgeId 过滤，能召回该知识库的全部 chunk）。
+
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #3 "PGVector HYBRID mode 召回" 改为 "纯向量召回"（当前 EmbeddingHandler 实际检索实现是 EmbeddingStoreContentRetriever + vector embedding store filter，无 HYBRID / 全文检索代码；HYBRID 模式依赖 Phase 1 P1.1 hybrid-search 落地后启用，详见 §4.1）----------- -->
+        // v3.1 改写说明：原文 "PGVector HYBRID mode 召回" 不符合实际代码实现。
+        // 当前 EmbeddingHandler.embeddingSearch / getQueryRouter 实际检索路径：
+        //   1. EmbeddingStoreContentRetriever + EmbeddingStore.search(EmbeddingSearchRequest)
+        //   2. filter 仅 metadataKey(EMBED_STORE_METADATA_KNOWLEDGEID).isEqualTo(knowId)
+        //   3. 无 HYBRID / 全文检索代码
+        // 因此 Fallback 退化路径实为"纯向量召回"（非 HYBRID mode）。
+        // HYBRID 模式（标量+向量双轨检索）依赖 Phase 1 P1.1 hybrid-search 落地后启用，详见 §4.1。
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #3 "PGVector HYBRID mode 召回" 改为 "纯向量召回"（当前 EmbeddingHandler 实际检索实现是 EmbeddingStoreContentRetriever + vector embedding store filter，无 HYBRID / 全文检索代码；HYBRID 模式依赖 Phase 1 P1.1 hybrid-search 落地后启用，详见 §4.1）----------- -->
     }
 }
 // update-end---author:song ---date:2026-07-10  for：【GB检索】LLM 意图解析 Fallback 机制，防止 LLM 超时导致 0 召回-------
@@ -484,14 +515,39 @@ public GbQueryIntent extractWithFallback(String userQuery) {
 // 1) 给 LLM 调用加超时（避免 Fallback 链路拖慢 P99）
 miniMaxModel = OpenAiChatModel.builder()...timeout(Duration.ofSeconds(3)).build();
 
-// 2) 用 Resilience4j 限频熔断（参考 LangChain4j-fault-tolerance 项目）
-CircuitBreakerConfig.custom().failureRateThreshold(50).waitDurationInOpenState(Duration.ofSeconds(30));
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #1 Resilience4j 推荐改为"不引入新库"（当前 pom 无 resilience4j / langchain4j-fault-tolerance 依赖，避免引入新依赖；优先用 LangChain4j 1.x 自带 timeout + maxRetries + Micrometer）----------- -->
+// 2) 熔断与重试（不引入新依赖）：
+// 优先用 LangChain4j 1.x 自带机制：
+//   - timeout：OpenAiChatModel.builder().timeout(Duration.ofSeconds(3))
+//   - maxRetries：OpenAiChatModel.builder().maxRetries(2)
+//   - Micrometer 指标：counter("airag_llm_intent_call_total").tag("status", "success|failure")
+// 若项目后续引入 Resilience4j / langchain4j-fault-tolerance，可切换为：
+//   CircuitBreakerConfig.custom().failureRateThreshold(50).waitDurationInOpenState(Duration.ofSeconds(30));
+// 但 v3.1 不预设该依赖；由后续 Phase 单独评估。
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #1 Resilience4j 推荐改为"不引入新库"（当前 pom 无 resilience4j / langchain4j-fault-tolerance 依赖，避免引入新依赖；优先用 LangChain4j 1.x 自带 timeout + maxRetries + Micrometer）----------- -->
 
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1（原 FAIL #3 经 reviewer 校准）"进一步加固"代码块变量 exception 修正（变量未定义，原文使用 exception 但本块无 try-catch 上下文；建议改为在 try-catch 内引用 e.getClass().getSimpleName()）----------- -->
 // 3) 监控：fallback 命中率打到 Prometheus，记录 airag_llm_intent_fallback_total
-counter("airag_llm_intent_fallback_total").tag("reason", exception.getClass().getSimpleName()).increment();
+// 修正：原代码使用未定义变量 exception；改为在调用方 try-catch 块内引用 e.getClass().getSimpleName()
+counter("airag_llm_intent_fallback_total")
+    .tag("reason", "<ExceptionClassName>")  // ← 实际使用时应在 catch 块内改为 e.getClass().getSimpleName()
+    .increment();
+// 推荐写法（嵌入 try-catch）：
+// try { ... } catch (Exception e) {
+//     counter("airag_llm_intent_fallback_total").tag("reason", e.getClass().getSimpleName()).increment();
+// }
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1（原 FAIL #3 经 reviewer 校准）"进一步加固"代码块变量 exception 修正（变量未定义，原文使用 exception 但本块无 try-catch 上下文；建议改为在 catch 块内引用 e.getClass().getSimpleName()）----------- -->
 ```
 
 ---
+
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #4 §4.3.4 末尾加 GitNexus impact 提示（接入 AIChatHandler 前必须跑 impact，避免盲改引入未预期风险）----------- -->
+> **GitNexus 门禁**（详见 §2.5）：实施本节代码（创建 `GbIntentExtractor` 接口 + `extractWithFallback` 方法）前必须先跑 `mcp__gitnexus__impact({target: "AIChatHandler.completions", direction: "upstream", summaryOnly: true})`；HIGH / CRITICAL 风险时停下报告，不允许直接进入代码改动。
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P1 WARN #4 §4.3.4 末尾加 GitNexus impact 提示（接入 AIChatHandler 前必须跑 impact，避免盲改引入未预期风险）----------- -->
+
+<!-- update-begin---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P2 WARN #5 §4.3 末尾注明同义扩展主路径（§4.3 只抽取强结构槽位；同义术语扩展见 §2.3 / §4.1.3 ExpandingQueryTransformer）----------- -->
+> **同义术语扩展主路径**：根因 #10（同义术语 / Battery Pack / 电池组 / 电池包）的扩展由 §2.3 / §4.1.3 的 `ExpandingQueryTransformer` 承载；§4.3 只抽取强结构槽位（testType / nCells / objectType / inferredChapter / environmentCondition / isBooleanQuery），不承担同义词改写职责。
+<!-- update-end---author:song-claude ---date:2026-07-11  for：【v3.1】§4.3 二审修订：P2 WARN #5 §4.3 末尾注明同义扩展主路径（§4.3 只抽取强结构槽位；同义术语扩展见 §2.3 / §4.1.3 ExpandingQueryTransformer）----------- -->
 
 ### 4.4 根因 4 — 视觉像素 ≠ 结构化语义（升级版：双通道）
 

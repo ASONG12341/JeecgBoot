@@ -11,7 +11,8 @@ import java.util.Set;
  * <p>对 {@link GbQueryIntent} 中的字段就地（in-place）清洗：
  * - testType：归一化为小写 snake_case，非法值置 null，不再限定具体枚举（支持后续新增任意国标）
  * - objectType：仅允许 cell / pack / system，非法值置 null
- * 只要 7 个字段中至少有一个非 null 字段即返回 true，否则返回 false。</p>
+ * - clauseId / amendment / status：可选增值字段，不强制要求，仅做空白trim；非空即参与有效判定
+ * 只要 10 个字段中至少有一个非 null 字段即返回 true，否则返回 false。</p>
  *
  * @author song-claude
  * @date 2026-07-11
@@ -102,6 +103,41 @@ public class GbIntentValidator {
         if (intent.getIsBooleanQuery() != null) {
             anyValid = true;
         }
+
+        //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】GbIntentValidator 增加 clauseId/amendment/status 可选增值字段校验-----------
+        String clauseId = intent.getClauseId();
+        if (clauseId != null) {
+            clauseId = clauseId.trim();
+            if (!clauseId.isEmpty()) {
+                intent.setClauseId(clauseId);
+                anyValid = true;
+            } else {
+                intent.setClauseId(null);
+            }
+        }
+
+        String amendment = intent.getAmendment();
+        if (amendment != null) {
+            amendment = amendment.trim();
+            if (!amendment.isEmpty()) {
+                intent.setAmendment(amendment);
+                anyValid = true;
+            } else {
+                intent.setAmendment(null);
+            }
+        }
+
+        String status = intent.getStatus();
+        if (status != null) {
+            status = status.trim();
+            if (!status.isEmpty()) {
+                intent.setStatus(status);
+                anyValid = true;
+            } else {
+                intent.setStatus(null);
+            }
+        }
+        //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】GbIntentValidator 增加 clauseId/amendment/status 可选增值字段校验-----------
 
         return anyValid;
     }

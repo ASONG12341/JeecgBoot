@@ -34,6 +34,33 @@ public class KnowConfigBean {
      */
     private MineruConfig minerU = new MineruConfig();
 
+    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1】HYBRID 搜索与 metadata 提取 Kill Switch-----------
+    /**
+     * 是否启用 PGVector HYBRID 模式（vector + full-text）
+     */
+    private boolean hybridSearch = false;
+
+    /**
+     * PG text search config，仅 HYBRID 生效
+     */
+    private String textSearchConfig = "simple";
+
+    /**
+     * RRF 融合参数 k
+     */
+    private int rrfK = 60;
+
+    /**
+     * 是否启用查询扩展（ExpandingQueryTransformer）
+     */
+    private boolean queryExpansionEnabled = false;
+
+    /**
+     * 是否启用 metadata 提取 LLM fallback
+     */
+    private boolean metadataLlmFallbackEnabled = false;
+    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1】HYBRID 搜索与 metadata 提取 Kill Switch-----------
+
     /**
      * MinerU 配置
      */

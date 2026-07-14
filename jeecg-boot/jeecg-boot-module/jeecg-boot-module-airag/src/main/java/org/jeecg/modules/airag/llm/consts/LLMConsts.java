@@ -218,4 +218,36 @@ public class LLMConsts {
      * 删除所有URL和电子邮箱地址
      */
     public static final String TEXT_RULES_REMOVE_URLS_EMAILS = "removeUrlsEmails";
+
+    //update-begin---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 文档解析状态常量-----------
+    /**
+     * 文档解析状态: 已上传
+     */
+    public static final String PARSE_STATUS_UPLOADED = "UPLOADED";
+    /**
+     * 文档解析状态: 解析中（GbDocumentStructureParser 执行中）
+     */
+    public static final String PARSE_STATUS_PARSING = "PARSING";
+    /**
+     * 文档解析状态: 已解析（等待用户确认）
+     */
+    public static final String PARSE_STATUS_PARSED = "PARSED";
+    /**
+     * 文档解析状态: 用户已确认
+     */
+    public static final String PARSE_STATUS_CONFIRMED = "CONFIRMED";
+    /**
+     * 文档解析状态: 索引中（LLM metadata 抽取 + 向量化）
+     */
+    public static final String PARSE_STATUS_INDEXING = "INDEXING";
+    /**
+     * 文档解析状态: 完成
+     */
+    public static final String PARSE_STATUS_COMPLETED = "COMPLETED";
+
+    /**
+     * 知识库类型: 国标（GB Standard）
+     */
+    public static final String KNOWLEDGE_TYPE_GB_STANDARD = "gb_standard";
+    //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 文档解析状态常量-----------
 }

@@ -126,15 +126,23 @@ public class AIChatHandler implements IAIChatHandler {
      * @date 2025/2/24 17:30
      */
     public String completions(AiragModel airagModel, List<ChatMessage> messages, AIChatParams params) {
+        //update-begin---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】completions 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
+        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1 Task 10 的 IntentContext.get() 永远 null)
+        try {
+            extractAndCacheIntent("completions", messages, params);
+        } catch (Exception e) {
+            log.warn("[AI-CHAT][completions] 预抽取 intent 失败, 继续主流程", e);
+        }
+        //update-end---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】completions 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
+
         params = mergeParams(airagModel, params);
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
 
-        // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏-----------
+        // update-begin---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】completions 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
         String resp = null;
         try {
-            extractAndCacheIntent("completions", messages, params);
             try {
                 resp = llmHandler.completions(messages, params);
             } catch (ToolExecutionException e) {
@@ -158,7 +166,7 @@ public class AIChatHandler implements IAIChatHandler {
             closeMcpConnections(params);
             // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions finally 关闭 MCP 连接（防御式：即使 llmHandler 内部已关闭也幂等；防止 MCP 客户端连接泄漏）-----------
         }
-        // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏-----------
+        // update-end---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】completions 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
     }
 
     /**
@@ -226,14 +234,22 @@ public class AIChatHandler implements IAIChatHandler {
      * @date 2025/2/24 17:29
      */
     private TokenStream chat(AiragModel airagModel, List<ChatMessage> messages, AIChatParams params) {
+        //update-begin---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】流式 chat 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
+        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1 Task 10 的 IntentContext.get() 永远 null)
+        try {
+            extractAndCacheIntent("chat", messages, params);
+        } catch (Exception e) {
+            log.warn("[AI-CHAT][chat] 预抽取 intent 失败, 继续主流程", e);
+        }
+        //update-end---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】流式 chat 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
+
         params = mergeParams(airagModel, params);
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
 
-        // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏（流式返回 TokenStream，clear 在流启动前）；同步关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会）-----------
+        // update-begin---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】流式 chat 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
         try {
-            extractAndCacheIntent("chat", messages, params);
             return llmHandler.chat(messages, params);
         } finally {
             IntentContext.clear();
@@ -241,7 +257,7 @@ public class AIChatHandler implements IAIChatHandler {
             closeMcpConnections(params);
             // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat finally 关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会；流式消费完成后的连接关闭依赖 llmHandler 内部 / 后续 P1.3 阶段处理）-----------
         }
-        // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat 同步抽取 intent：调统一方法 extractAndCacheIntent（v3.1 §4.3.4 DRY 重构）；外层 try-finally 保证异常路径也清理 IntentContext，避免 ThreadLocal 跨请求污染 + 内存泄漏（流式返回 TokenStream，clear 在流启动前）；同步关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会）-----------
+        // update-end---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】流式 chat 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
     }
 
     //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
@@ -377,7 +393,10 @@ public class AIChatHandler implements IAIChatHandler {
         //update-end---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         if (oConvertUtils.isObjectNotEmpty(knowIds)) {
             try {
-                QueryRouter queryRouter = embeddingHandler.getQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity());
+                //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 10】AIChatHandler.mergeParams 从 IntentContext 读取 intent 并传入 getQueryRouter 重载（避免在 mergeParams 再调一次 extractWithFallback 触发重复 LLM 调用）-----------
+                GbQueryIntent intent = IntentContext.get();
+                QueryRouter queryRouter = embeddingHandler.getQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity(), intent);
+                //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 10】AIChatHandler.mergeParams 从 IntentContext 读取 intent 并传入 getQueryRouter 重载（避免在 mergeParams 再调一次 extractWithFallback 触发重复 LLM 调用）-----------
                 params.setQueryRouter(queryRouter);
                 //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
                 log.info("[RAG][mergeParams] queryRouter 已注入到 params, 类型={}",

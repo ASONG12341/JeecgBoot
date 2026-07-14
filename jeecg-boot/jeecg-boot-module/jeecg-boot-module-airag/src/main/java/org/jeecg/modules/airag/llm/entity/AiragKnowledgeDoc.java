@@ -121,4 +121,15 @@ public class AiragKnowledgeDoc implements Serializable {
     @Schema(description = "状态")
     private String status;
 
+    //update-begin---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 文档解析状态字段-----------
+    /**
+     * 文档解析状态（GB国标知识库专用）
+     * UPLOADED → PARSING → PARSED → CONFIRMED → INDEXING → COMPLETED
+     * 非国标知识库此字段为 null
+     */
+    @Excel(name = "解析状态", width = 15)
+    @Schema(description = "解析状态: UPLOADED/PARSING/PARSED/CONFIRMED/INDEXING/COMPLETED")
+    private String parseStatus;
+    //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 文档解析状态字段-----------
+
 }

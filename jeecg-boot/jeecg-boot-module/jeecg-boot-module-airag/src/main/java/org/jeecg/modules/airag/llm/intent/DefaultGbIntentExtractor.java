@@ -48,6 +48,11 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
             - inferredChapter: 根据 gbStandard + objectType 推断的章号，如 "7" / "8.2"；无法推断则 null。
             - environmentCondition: 环境条件如 '25±5℃'；未提及则 null。
             - isBooleanQuery: true(能否/是否/会怎样/是否适用) / false(如何/怎么/一般陈述)。
+            //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】EXTRACTOR_SYSTEM_PROMPT 增加 clauseId/amendment/status 字段规则-----------
+            - clauseId: 条款号，如 "9.2" / "8.3.1"；未提及则 null。
+            - amendment: 标准版次/修订年份，如 "2022"；未提及则 null。
+            - status: 条款状态，"current"(现行) 或 "superseded"(废止)；出现"废止"/"已撤销"→"superseded"，否则未提及则 null。
+            //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】EXTRACTOR_SYSTEM_PROMPT 增加 clauseId/amendment/status 字段规则-----------
 
             必须严格输出 JSON，不要包含任何解释性文字。JSON 输出格式如下：
             {
@@ -57,9 +62,16 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
               "objectType": "...",
               "inferredChapter": "...",
               "environmentCondition": "...",
-              "isBooleanQuery": true/false
+              "isBooleanQuery": true/false,
+              //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】JSON 示例增加 clauseId/amendment/status-----------
+              "clauseId": "...",
+              "amendment": "...",
+              "status": "..."
+              //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】JSON 示例增加 clauseId/amendment/status-----------
             }
+            //update-begin---author:song-claude ---date:2026-07-11  for：【修复模块编译错误】DefaultGbIntentExtractor.java EXTRACTOR_SYSTEM_PROMPT text block 末尾补回分号-----------
             """;
+            //update-end---author:song-claude ---date:2026-07-11  for：【修复模块编译错误】DefaultGbIntentExtractor.java EXTRACTOR_SYSTEM_PROMPT text block 末尾补回分号-----------
 
     @Autowired
     private GbIntentExtractorProperties properties;
@@ -129,7 +141,7 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
         return null;
     }
 
-    private ChatModel buildChatModel(AiragModel model) {
+    ChatModel buildChatModel(AiragModel model) {
         String baseUrl = model.getBaseUrl();
         String apiKey = resolveApiKey(model.getCredential());
         String modelName = model.getModelName();
@@ -156,12 +168,16 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
      * @param credential 数据库中的 credential 原始值
      * @return 实际用于请求的 API key
      */
-    private String resolveApiKey(String credential) {
-        if (credential == null || credential.trim().isEmpty()) {
-            return credential;
+    String resolveApiKey(String credential) {
+        if (credential == null) {
+            return null;
         }
 
         String trimmed = credential.trim();
+        if (trimmed.isEmpty()) {
+            return trimmed;
+        }
+
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
                 JsonNode node = objectMapper.readTree(trimmed);
@@ -185,6 +201,11 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
                 .inferredChapter(null)
                 .environmentCondition(null)
                 .isBooleanQuery(null)
+                //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】nullIntent 增加 clauseId/amendment/status-----------
+                .clauseId(null)
+                .amendment(null)
+                .status(null)
+                //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.1 Task 2】nullIntent 增加 clauseId/amendment/status-----------
                 .build();
     }
 }

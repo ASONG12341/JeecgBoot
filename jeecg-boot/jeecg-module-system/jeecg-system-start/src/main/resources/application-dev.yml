@@ -279,6 +279,15 @@ jeecg:
           retry-times: 60
           # 轮询结果间隔（秒）
           retry-interval: 2
+    # GB国标知识引擎
+    gb-standard:
+      # 总开关
+      enabled: true
+      # 用户确认页开关
+      user-review-enabled: true
+      structure-parser:
+        enabled: true
+        llm-fallback: false
   #  Unipush配置 云函数调用 URL 化地址
   unicloud:
     pushUrl:
