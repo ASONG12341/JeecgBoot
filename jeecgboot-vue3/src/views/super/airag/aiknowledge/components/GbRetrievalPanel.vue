@@ -76,16 +76,18 @@
 
 <script lang="ts" setup>
 import { ref } from 'vue';
+import { message } from 'ant-design-vue';
 import { SearchOutlined, CheckCircleOutlined, ClockCircleOutlined, TagsOutlined } from '@ant-design/icons-vue';
 import { queryGbStandard, type GbRetrievalRequest, type GbRetrievalResponse, type RetrievalResult } from '../GbRetrieval.api';
 import GbResultCard from './GbResultCard.vue';
 
-//update-begin---author:song ---date:2026-07-14  for：【GB检索P2】检索面板 props 对齐设计文档，支持 knowledgeId-----------
+//update-begin---author:song ---date:2026-07-14 for：【GB检索P1】修正 GbRetrievalPanel 类型与错误处理-----------
 const props = defineProps<{
+  standardId?: string;
   knowledgeId?: string;
   knowledgeIds?: string[];
 }>();
-//update-end---author:song ---date:2026-07-14  for：【GB检索P2】检索面板 props 对齐设计文档，支持 knowledgeId-----------
+//update-end---author:song ---date:2026-07-14 for：【GB检索P1】修正 GbRetrievalPanel 类型与错误处理-----------
 
 const emit = defineEmits<{
   (e: 'result-click', result: RetrievalResult): void;
@@ -97,33 +99,38 @@ const selectedIntent = ref('');
 const loading = ref(false);
 const response = ref<GbRetrievalResponse | null>(null);
 
+//update-begin---author:song ---date:2026-07-14 for：【GB检索P1】修正 GbRetrievalPanel 类型与错误处理-----------
 /**
  * 执行查询
  */
 const handleQuery = async () => {
   if (!queryText.value.trim()) {
+    message.warning('请输入查询内容');
     return;
   }
 
   loading.value = true;
 
   try {
+    const knowledgeIds = props.knowledgeIds || (props.knowledgeId ? [props.knowledgeId] : undefined);
     const request: GbRetrievalRequest = {
       query: queryText.value,
       intent: selectedIntent.value || undefined,
-      knowledgeIds: props.knowledgeIds || (props.knowledgeId ? [props.knowledgeId] : undefined),
+      standardId: props.standardId,
+      knowledgeIds,
       topK: 10,
       similarityThreshold: 0.7,
     };
 
-    const result = await queryGbStandard(request);
-    response.value = result;
-  } catch (error) {
+    response.value = await queryGbStandard(request);
+  } catch (error: any) {
     console.error('检索失败:', error);
+    message.error(error?.message || '检索失败');
   } finally {
     loading.value = false;
   }
 };
+//update-end---author:song ---date:2026-07-14 for：【GB检索P1】修正 GbRetrievalPanel 类型与错误处理-----------
 
 /**
  * 获取意图标签
