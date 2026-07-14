@@ -137,12 +137,28 @@
                         </div>
                       </a-tooltip>
                     </div>
+                    <!--update-begin---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 解析状态标识----------- -->
+                    <div v-if="item.parseStatus" class="card-text" style="margin-top: 2px;">
+                      <span style="font-size: 11px; color: #999;">国标：</span>
+                      <a-tag v-if="item.parseStatus==='PARSED'" color="orange" size="small" style="font-size: 10px; padding: 0 4px;">待确认</a-tag>
+                      <a-tag v-else-if="item.parseStatus==='COMPLETED'" color="green" size="small" style="font-size: 10px; padding: 0 4px;">已确认</a-tag>
+                      <a-tag v-else-if="item.parseStatus==='PARSING'" color="blue" size="small" style="font-size: 10px; padding: 0 4px;">解析中</a-tag>
+                      <a-tag v-else-if="item.parseStatus==='CONFIRMED'" color="cyan" size="small" style="font-size: 10px; padding: 0 4px;">已确认</a-tag>
+                      <a-tag v-else size="small" style="font-size: 10px; padding: 0 4px;">{{ item.parseStatus }}</a-tag>
+                    </div>
+                    <!--update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 解析状态标识----------- -->
                     <a-dropdown placement="bottomRight" :trigger="['click']">
                       <div class="ant-dropdown-link pointer operation" @click.prevent.stop>
                         <Icon icon="ant-design:ellipsis-outlined" size="16"></Icon>
                       </div>
                       <template #overlay>
                         <a-menu>
+                          <!--update-begin---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 国标解析入口----------- -->
+                          <a-menu-item v-if="item.type==='file' && getFileSuffix(item.metadata)==='pdf'" key="gbPreview" @click="handleGbPreview(item)">
+                            <Icon icon="ant-design:file-search-outlined" size="16"></Icon>
+                            国标解析
+                          </a-menu-item>
+                          <!--update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 国标解析入口----------- -->
                           <a-menu-item key="vectorization" @click="handleVectorization(item.id)">
                             <Icon icon="ant-design:retweet-outlined" size="16"></Icon>
                             向量化
@@ -253,6 +269,8 @@
     <AiragKnowledgeDocTextModal @register="docTextRegister" @success="handleSuccess"></AiragKnowledgeDocTextModal>
     <!--  文本明细  -->
     <AiTextDescModal @register="docTextDescRegister"></AiTextDescModal>
+    <!--  GB国标解析确认页  -->
+    <GbStandardPreview @register="gbPreviewRegister" @confirmed="handleGbConfirmed" :docId="gbPreviewDocId" :pdfUrl="gbPreviewPdfUrl" />
   </div>
 </template>
 
@@ -266,6 +284,7 @@
   import { useListPage } from '@/hooks/system/useListPage';
   import AiragKnowledgeDocTextModal from './AiragKnowledgeDocTextModal.vue';
   import AiTextDescModal from './AiTextDescModal.vue';
+  import GbStandardPreview from './GbStandardPreview.vue';
   import { useMessage } from '@/hooks/web/useMessage';
   import { LoadingOutlined } from '@ant-design/icons-vue';
   import {Avatar, message, Modal, Pagination} from 'ant-design-vue';
@@ -288,6 +307,7 @@
       BasicModal,
       AiragKnowledgeDocTextModal,
       AiTextDescModal,
+      GbStandardPreview,
       Loading,
     },
     emits: ['success', 'register'],
@@ -363,7 +383,11 @@
       //注册modal
       const [docTextRegister, { openModal: docTextOpenModal }] = useModal();
       const [docTextDescRegister, { openModal: docTextDescOpenModal }] = useModal();
+      const [gbPreviewRegister, { openModal: gbPreviewOpenModal }] = useModal();
       const type = ref<string>('');
+      // GB 预览参数
+      const gbPreviewDocId = ref<string>('');
+      const gbPreviewPdfUrl = ref<string>('');
       // 知识库的分段策略 metadata
       const knowledgeMetadata = ref<string>('');
       //注册modal
@@ -494,6 +518,35 @@
        */
       async function handleVectorization(id) {
         await knowledgeRebuildDoc({ docIds: id }, handleSuccess);
+      }
+
+      /**
+       * GB国标解析预览
+       * 仅对 PDF 文件类型的文档可用
+       */
+      function handleGbPreview(record) {
+        gbPreviewDocId.value = record.id;
+        // 尝试从 metadata 中获取 PDF 文件路径
+        let pdfUrl = '';
+        if (record.metadata) {
+          try {
+            const meta = JSON.parse(record.metadata);
+            if (meta.filePath) {
+              pdfUrl = getFileAccessHttpUrl(meta.filePath);
+            }
+          } catch (e) {
+            console.warn('解析 metadata 失败', e);
+          }
+        }
+        gbPreviewPdfUrl.value = pdfUrl;
+        gbPreviewOpenModal(true, { docId: record.id });
+      }
+
+      /**
+       * GB国标解析确认回调 — 刷新文档列表
+       */
+      function handleGbConfirmed() {
+        reload();
       }
 
       /**
@@ -757,6 +810,11 @@
         handleDelete,
         getDocFailedReason,
         handleVectorization,
+        handleGbPreview,
+        handleGbConfirmed,
+        gbPreviewRegister,
+        gbPreviewDocId,
+        gbPreviewPdfUrl,
         pageNo,
         pageSize,
         pageSizeOptions,
