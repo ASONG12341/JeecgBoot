@@ -73,6 +73,12 @@
                     <Icon icon="ant-design:retweet-outlined" size="16"></Icon>
                     向量化
                   </a-menu-item>
+                  <!--update-begin---song---date:2026-07-14  for：知识库列表增加 GB 检索入口----------- -->
+                  <a-menu-item key="gb-retrieval" @click.prevent.stop="goToGbRetrieval(item)">
+                    <Icon icon="ant-design:file-search-outlined" size="16"></Icon>
+                    GB 检索
+                  </a-menu-item>
+                  <!--update-end---song---date:2026-07-14  for：知识库列表增加 GB 检索入口----------- -->
                   <a-menu-item key="text" @click.prevent.stop="handleEditClick(item)">
                     <Icon class="pointer" icon="ant-design:edit-outlined" size="16"></Icon>
                     编辑
@@ -114,6 +120,9 @@
 
 <script lang="ts">
   import { reactive, ref } from 'vue';
+  //update-begin---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
+  import { useRouter } from 'vue-router';
+  //update-end---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
   import { useModal } from '/@/components/Modal';
   import { deleteModel, list, rebuild } from './AiKnowledgeBase.api';
   import { doDeleteAllDoc } from "./AiKnowledgeBase.api.util";
@@ -170,6 +179,9 @@
       //查询区域表单的ref
       const formRef = ref();
       const { createMessage } = useMessage();
+      //update-begin---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
+      const router = useRouter();
+      //update-end---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
 
       //页面初始化执行列表查询
       reload();
@@ -279,6 +291,23 @@
       //update-end---wangshuai---date:20260414  for：【QQYUN-14932】创建知识库时，可以创建一个分段策略，知识库里面的文档默认使用知识库的分段策略------------
       }
 
+      //update-begin---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
+      /**
+       * GB 检索点击事件
+       *
+       * @param item
+       */
+      const goToGbRetrieval = (item) => {
+        router.push({
+          path: '/super/airag/aiknowledge/gb-retrieval',
+          query: {
+            knowledgeId: item.id,
+            name: item.name,
+          },
+        });
+      };
+      //update-end---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
+
       /**
        * 知识库向量化
        * @param id
@@ -318,6 +347,9 @@
         handleDocClick,
         docListRegister,
         handleVectorization,
+        //update-begin---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
+        goToGbRetrieval,
+        //update-end---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
       };
     },
   };
