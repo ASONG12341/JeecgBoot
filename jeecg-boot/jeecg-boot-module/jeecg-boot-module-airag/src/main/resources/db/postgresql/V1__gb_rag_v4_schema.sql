@@ -2,7 +2,8 @@
 -- GB-RAG v4 L1 数据模型（PostgreSQL 18）
 -- 依据：gb-rag-v4/02-L1-数据模型与表结构.md
 -- 执行方式：手动在 PG18 上执行（项目 FlywayConfig 只跑 MySQL，不接入 Flyway）
--- 前置：确认 PG >= 18（uuidv7 / Skip Scan / VIRTUAL 生成列 / GIN 均需 PG18）
+-- 前置：确认 PG >= 18（Skip Scan 多列索引 / GIN 索引 / split_part 表达式索引 需 PG18）
+-- 注：主键 ID 为 Java 侧 ASSIGN_ID 雪花 ID（VARCHAR(36)），不使用 DB 的 uuidv7() 默认值
 -- ============================================================
 
 -- 必备扩展
@@ -79,7 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_gb_clause_quantity ON gb_clause(standard_id, quan
 -- GIN 兜底超长尾动态字段
 CREATE INDEX IF NOT EXISTS idx_gb_clause_metadata_gin ON gb_clause USING GIN (metadata);
 
--- PG18 虚拟生成列：clause_path 拆解 chapter（领域无关派生）
+-- 表达式索引：clause_path 拆解 chapter（领域无关派生，PG 表达式索引）
 CREATE INDEX IF NOT EXISTS idx_gb_clause_chapter ON gb_clause (standard_id, (split_part(clause_path, '.', 1)));
 
 -- ------------------------------------------------------------
