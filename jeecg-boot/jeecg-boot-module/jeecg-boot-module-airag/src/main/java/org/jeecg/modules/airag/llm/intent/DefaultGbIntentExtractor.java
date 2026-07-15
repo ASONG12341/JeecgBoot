@@ -105,8 +105,10 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
         ChatModel chatModel;
         try {
             chatModel = gbLlmClient.buildChatModel(modelName, properties.getTimeoutSeconds());
-        } catch (IllegalStateException e) {
-            log.warn("[GB检索][GbIntentExtractor] 未找到 name={} 的激活模型配置: {}", modelName, e.getMessage());
+        } catch (Exception e) {
+            // 模型查找失败（未激活）或 credential 解析失败（空/非法）都退化为 null intent，
+            // 保持与重构前的宽容行为一致（不抛异常到调用方）。
+            log.warn("[GB检索][GbIntentExtractor] 构建 ChatModel 失败, model={}: {}", modelName, e.getMessage());
             return null;
         }
         //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】模型查找 + ChatModel 构建委托给 GbLlmClient（内部查 airag_model 并解析 credential）-----------
