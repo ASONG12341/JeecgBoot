@@ -1,13 +1,11 @@
 package org.jeecg.modules.airag.llm.intent;
 
-import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import org.jeecg.modules.airag.common.handler.GbQueryIntent;
-import org.jeecg.modules.airag.llm.entity.AiragModel;
-import org.jeecg.modules.airag.llm.service.IAiragModelService;
+import org.jeecg.modules.airag.llm.gbstandard.llm.GbLlmClient;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -20,6 +18,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -29,8 +29,12 @@ import static org.mockito.Mockito.*;
  * 1. GbIntentValidator 对非法字段的就地清洗
  * 2. 空/空字符串用户查询直接返回 null intent
  * 3. 缺失模型配置时返回 null intent
- * 4. credential JSON / 纯文本 / 异常值解析
- * 5. 模型返回正常 JSON 时成功抽取 intent
+ * 4. 模型返回正常 JSON 时成功抽取 intent
+ *
+ * //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】适配 GbLlmClient 注入：删除 resolveApiKey 直测（已迁至 GbLlmClientTest），mock GbLlmClient 替代原 IAiragModelService + buildChatModel spy-----------
+ * credential 解析（JSON/纯文本/空值/异常 JSON）的覆盖已迁移到 GbLlmClientTest，
+ * 此处仅验证 DefaultGbIntentExtractor 的抽取主流程（委托 GbLlmClient 后行为不变）。
+ * //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】适配 GbLlmClient 注入：删除 resolveApiKey 直测（已迁至 GbLlmClientTest），mock GbLlmClient 替代原 IAiragModelService + buildChatModel spy-----------
  */
 //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】新增 DefaultGbIntentExtractor 单元测试-----------
 @ExtendWith(MockitoExtension.class)
@@ -42,8 +46,10 @@ class DefaultGbIntentExtractorTest {
     @Spy
     private GbIntentExtractorProperties properties;
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient（替代 IAiragModelService），抽取流程委托它构建 ChatModel-----------
     @Mock
-    private IAiragModelService airagModelService;
+    private GbLlmClient gbLlmClient;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient（替代 IAiragModelService），抽取流程委托它构建 ChatModel-----------
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -108,14 +114,13 @@ class DefaultGbIntentExtractorTest {
         );
     }
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】原 testMissingModelConfigReturnsNullIntent 改为 mock GbLlmClient.buildChatModel 抛 IllegalStateException（替代原 lambdaQuery mock）-----------
     @Test
-    @SuppressWarnings("unchecked")
     void testMissingModelConfigReturnsNullIntent() {
         System.out.println("[Test] testMissingModelConfigReturnsNullIntent start");
-        LambdaQueryChainWrapper<AiragModel> wrapper = mock(LambdaQueryChainWrapper.class);
-        when(wrapper.eq(any(), any())).thenReturn(wrapper);
-        when(wrapper.one()).thenReturn(null);
-        when(airagModelService.lambdaQuery()).thenReturn(wrapper);
+        // GbLlmClient 内部未找到激活模型时抛 IllegalStateException，DefaultGbIntentExtractor 应捕获并返回 null intent
+        when(gbLlmClient.buildChatModel(anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("未找到已激活的模型: qwen-flash"));
 
         GbQueryIntent intent = extractor.extractWithFallback("GB 31241 过充测试", Collections.emptyList());
         System.out.println("[Test] result: " + toLog(intent));
@@ -131,45 +136,15 @@ class DefaultGbIntentExtractorTest {
                 () -> assertNull(intent.getIsBooleanQuery())
         );
     }
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】原 testMissingModelConfigReturnsNullIntent 改为 mock GbLlmClient.buildChatModel 抛 IllegalStateException（替代原 lambdaQuery mock）-----------
 
     //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】补充 credential 解析单元测试：覆盖 JSON、纯文本、空值、异常 JSON-----------
-    @Test
-    void testResolveApiKeyFromJson() {
-        System.out.println("[Test] testResolveApiKeyFromJson start");
-        String apiKey = extractor.resolveApiKey("{\"apiKey\":\"sk-json-key\"}");
-        System.out.println("[Test] result: " + apiKey);
-        assertEquals("sk-json-key", apiKey, "应从 JSON credential 中提取 apiKey");
-    }
+    // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】补充 credential 解析单元测试：覆盖 JSON、纯文本、空值、异常 JSON-----------
+    // update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】resolveApiKey 已迁至 GbLlmClient，相关直测随之移除（见 GbLlmClientTest），原 testResolveApiKey* 4 个用例删除-----------
+    // update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】resolveApiKey 已迁至 GbLlmClient，相关直测随之移除（见 GbLlmClientTest），原 testResolveApiKey* 4 个用例删除-----------
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】testSuccessfulExtractionFromModelResponse 改为 mock GbLlmClient.buildChatModel 返回 ChatModel（替代原 spy(extractor).buildChatModel）-----------
     @Test
-    void testResolveApiKeyFromPlainText() {
-        System.out.println("[Test] testResolveApiKeyFromPlainText start");
-        String apiKey = extractor.resolveApiKey("sk-plain-key");
-        System.out.println("[Test] result: " + apiKey);
-        assertEquals("sk-plain-key", apiKey, "纯文本 credential 应原样返回");
-    }
-
-    @Test
-    void testResolveApiKeyWithNullOrEmpty() {
-        System.out.println("[Test] testResolveApiKeyWithNullOrEmpty start");
-        assertNull(extractor.resolveApiKey(null), "null credential 应返回 null");
-        assertEquals("", extractor.resolveApiKey(""), "空字符串 credential 应返回空字符串");
-        assertEquals("", extractor.resolveApiKey("   "), "纯空白 credential 应返回空字符串");
-    }
-
-    @Test
-    void testResolveApiKeyInvalidJsonFallsBackToPlainText() {
-        System.out.println("[Test] testResolveApiKeyInvalidJsonFallsBackToPlainText start");
-        String credential = "{not-a-valid-json}";
-        String apiKey = extractor.resolveApiKey(credential);
-        System.out.println("[Test] result: " + apiKey);
-        assertEquals(credential, apiKey, "非法 JSON credential 应回退为原字符串");
-    }
-    //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】补充 credential 解析单元测试：覆盖 JSON、纯文本、空值、异常 JSON-----------
-
-    //update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】补充模型正常返回 JSON 时成功抽取 intent 的 mock 测试-----------
-    @Test
-    @SuppressWarnings("unchecked")
     void testSuccessfulExtractionFromModelResponse() {
         System.out.println("[Test] testSuccessfulExtractionFromModelResponse start");
 
@@ -191,22 +166,10 @@ class DefaultGbIntentExtractorTest {
                 .build();
         when(chatModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class))).thenReturn(response);
 
-        AiragModel model = new AiragModel()
-                .setName("qwen-flash")
-                .setModelName("qwen-flash")
-                .setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1")
-                .setCredential("{\"apiKey\":\"sk-test\"}")
-                .setActivateFlag(1);
+        // 模型查找 + ChatModel 构建已委托给 GbLlmClient，此处直接 mock 它返回构造好的 ChatModel
+        when(gbLlmClient.buildChatModel(anyString(), anyInt())).thenReturn(chatModel);
 
-        LambdaQueryChainWrapper<AiragModel> wrapper = mock(LambdaQueryChainWrapper.class);
-        when(wrapper.eq(any(), any())).thenReturn(wrapper);
-        when(wrapper.one()).thenReturn(model);
-        when(airagModelService.lambdaQuery()).thenReturn(wrapper);
-
-        DefaultGbIntentExtractor extractorSpy = spy(extractor);
-        doReturn(chatModel).when(extractorSpy).buildChatModel(any(AiragModel.class));
-
-        GbQueryIntent intent = extractorSpy.extractWithFallback(
+        GbQueryIntent intent = extractor.extractWithFallback(
                 "GB 31241 第 7 章过充测试，3S 单体电芯，25±5℃", Collections.emptyList());
         System.out.println("[Test] result: " + toLog(intent));
 
@@ -219,7 +182,7 @@ class DefaultGbIntentExtractorTest {
         assertEquals("25±5℃", intent.getEnvironmentCondition());
         assertEquals(Boolean.FALSE, intent.getIsBooleanQuery());
     }
-    //update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】补充模型正常返回 JSON 时成功抽取 intent 的 mock 测试-----------
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】testSuccessfulExtractionFromModelResponse 改为 mock GbLlmClient.buildChatModel 返回 ChatModel（替代原 spy(extractor).buildChatModel）-----------
 
     private static String toLog(GbQueryIntent intent) {
         return "gbStandard=" + intent.getGbStandard()

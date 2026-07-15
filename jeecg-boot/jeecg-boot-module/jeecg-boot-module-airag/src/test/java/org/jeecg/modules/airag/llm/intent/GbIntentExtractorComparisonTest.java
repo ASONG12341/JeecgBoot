@@ -1,10 +1,10 @@
 package org.jeecg.modules.airag.llm.intent;
 
-import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.jeecg.modules.airag.common.handler.GbQueryIntent;
-import org.jeecg.modules.airag.llm.entity.AiragModel;
-import org.jeecg.modules.airag.llm.service.IAiragModelService;
+import org.jeecg.modules.airag.llm.gbstandard.llm.GbLlmClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -14,10 +14,11 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.util.Collections;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
@@ -37,11 +38,6 @@ class GbIntentExtractorComparisonTest {
     private static final String DASHSCOPE_API_KEY = "填写Key";
 
     /**
-     * 用于构造 credential JSON 的 ObjectMapper，不依赖测试里被 spy 的 objectMapper。
-     */
-    private static final ObjectMapper CREDENTIAL_MAPPER = new ObjectMapper();
-
-    /**
      * DashScope OpenAI 兼容 endpoint，固定值。
      */
     private static final String DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
@@ -59,8 +55,10 @@ class GbIntentExtractorComparisonTest {
     @Spy
     private GbIntentExtractorProperties properties;
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改 mock GbLlmClient（替代 IAiragModelService），用真实 OpenAiChatModel 调真实模型-----------
     @Mock
-    private IAiragModelService airagModelService;
+    private GbLlmClient gbLlmClient;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改 mock GbLlmClient（替代 IAiragModelService），用真实 OpenAiChatModel 调真实模型-----------
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -83,47 +81,25 @@ class GbIntentExtractorComparisonTest {
         System.out.println("[A/B] ===== " + tag + " start =====");
 
         properties.setPrimaryModelName(tag);
-        stubModelService(buildModel(tag));
+        stubLlmClient(tag);
         runQueries(tag);
 
         System.out.println("[A/B] ===== " + tag + " end =====");
     }
 
     /**
-     * 构造一条模拟的 airag_model 记录。
-     *
-     * 字段含义：
-     * - name:        模型配置在表里的标识名，和 properties 里的 primary 对应即可
-     * - modelName:   实际调用的模型名，固定 qwen-flash
-     * - baseUrl:     DashScope OpenAI 兼容地址，固定不变
-     * - credential:  API key（以生产环境 JSON 格式 {"apiKey":"..."} 存储）
-     * - activateFlag: 是否激活，必须填 1
+     * mock GbLlmClient.buildChatModel，返回真实 OpenAiChatModel 直连 DashScope。
+     * （原 buildModel/stubModelService 基于 IAiragModelService.lambdaQuery，P2 改委托 GbLlmClient 后不再适用。）
      */
-    private AiragModel buildModel(String modelName) {
-        String credentialJson;
-        try {
-            credentialJson = CREDENTIAL_MAPPER.writeValueAsString(
-                    Collections.singletonMap("apiKey", DASHSCOPE_API_KEY));
-        } catch (Exception e) {
-            throw new IllegalStateException("构造 credential JSON 失败", e);
-        }
-        return new AiragModel()
-                .setName(modelName)
-                .setModelName(modelName)
-                .setBaseUrl(DASHSCOPE_BASE_URL)
-                .setCredential(credentialJson)
-                .setActivateFlag(1);
-    }
-
-    /**
-     * mock IAiragModelService，让 extractor 调用 lambdaQuery() 时直接返回上面构造的 AiragModel。
-     * 这样就不需要真实数据库了。
-     */
-    private void stubModelService(AiragModel model) {
-        LambdaQueryChainWrapper<AiragModel> wrapper = mock(LambdaQueryChainWrapper.class);
-        when(wrapper.eq(any(), any())).thenReturn(wrapper);
-        when(wrapper.one()).thenReturn(model);
-        when(airagModelService.lambdaQuery()).thenReturn(wrapper);
+    private void stubLlmClient(String modelName) {
+        ChatModel chatModel = OpenAiChatModel.builder()
+                .baseUrl(DASHSCOPE_BASE_URL)
+                .apiKey(DASHSCOPE_API_KEY)
+                .modelName(modelName)
+                .timeout(Duration.ofSeconds(30))
+                .maxRetries(0)
+                .build();
+        when(gbLlmClient.buildChatModel(anyString(), anyInt())).thenReturn(chatModel);
     }
 
     private void runQueries(String tag) {

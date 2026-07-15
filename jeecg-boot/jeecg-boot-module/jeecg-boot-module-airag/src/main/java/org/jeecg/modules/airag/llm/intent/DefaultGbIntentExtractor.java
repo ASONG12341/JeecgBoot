@@ -1,7 +1,6 @@
 // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】DefaultGbIntentExtractor Qwen 化重构：固定 qwen-flash 单模型 + credential JSON 解析 + ChatModel JSON Mode-----------
 package org.jeecg.modules.airag.llm.intent;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -10,16 +9,15 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.openai.OpenAiChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.jeecg.modules.airag.common.handler.GbQueryIntent;
 import org.jeecg.modules.airag.common.handler.IGbIntentExtractor;
-import org.jeecg.modules.airag.llm.entity.AiragModel;
-import org.jeecg.modules.airag.llm.service.IAiragModelService;
+//update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient，删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient）-----------
+import org.jeecg.modules.airag.llm.gbstandard.llm.GbLlmClient;
+//update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient，删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient）-----------
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.List;
 
 /**
@@ -76,8 +74,10 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
     @Autowired
     private GbIntentExtractorProperties properties;
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient，删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient）-----------
     @Autowired
-    private IAiragModelService airagModelService;
+    private GbLlmClient gbLlmClient;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】改注入 GbLlmClient，删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient）-----------
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -101,16 +101,15 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
     }
 
     private GbQueryIntent tryExtract(String userQuery, String modelName, List<String> knowIds) {
-        AiragModel model = airagModelService.lambdaQuery()
-                .eq(AiragModel::getName, modelName)
-                .eq(AiragModel::getActivateFlag, 1)
-                .one();
-        if (model == null) {
-            log.warn("[GB检索][GbIntentExtractor] 未找到 name={} 的激活模型配置", modelName);
+        //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】模型查找 + ChatModel 构建委托给 GbLlmClient（内部查 airag_model 并解析 credential）-----------
+        ChatModel chatModel;
+        try {
+            chatModel = gbLlmClient.buildChatModel(modelName, properties.getTimeoutSeconds());
+        } catch (IllegalStateException e) {
+            log.warn("[GB检索][GbIntentExtractor] 未找到 name={} 的激活模型配置: {}", modelName, e.getMessage());
             return null;
         }
-
-        ChatModel chatModel = buildChatModel(model);
+        //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】模型查找 + ChatModel 构建委托给 GbLlmClient（内部查 airag_model 并解析 credential）-----------
         int maxAttempts = Math.max(1, properties.getMaxRetriesPerModel() + 1);
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -141,56 +140,8 @@ public class DefaultGbIntentExtractor implements IGbIntentExtractor {
         return null;
     }
 
-    ChatModel buildChatModel(AiragModel model) {
-        String baseUrl = model.getBaseUrl();
-        String apiKey = resolveApiKey(model.getCredential());
-        String modelName = model.getModelName();
-
-        if (baseUrl == null || baseUrl.trim().isEmpty()) {
-            baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
-        }
-
-        return OpenAiChatModel.builder()
-                .baseUrl(baseUrl)
-                .apiKey(apiKey)
-                .modelName(modelName)
-                .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
-                .maxRetries(0)
-                .build();
-    }
-
-    /**
-     * 解析 airag_model.credential 字段。
-     *
-     * <p>生产环境 credential 存储为 JSON 格式：{"apiKey":"..."}；
-     * 兼容旧版/测试环境直接存储为纯文本 API key 的情况。</p>
-     *
-     * @param credential 数据库中的 credential 原始值
-     * @return 实际用于请求的 API key
-     */
-    String resolveApiKey(String credential) {
-        if (credential == null) {
-            return null;
-        }
-
-        String trimmed = credential.trim();
-        if (trimmed.isEmpty()) {
-            return trimmed;
-        }
-
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-            try {
-                JsonNode node = objectMapper.readTree(trimmed);
-                JsonNode apiKeyNode = node.get("apiKey");
-                if (apiKeyNode != null && !apiKeyNode.isNull()) {
-                    return apiKeyNode.asText().trim();
-                }
-            } catch (Exception e) {
-                log.warn("[GB检索][GbIntentExtractor] credential JSON 解析失败，按纯文本使用: {}", e.getMessage());
-            }
-        }
-        return trimmed;
-    }
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient，此处改为注入调用）-----------
+    // update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】删除重复的 buildChatModel/resolveApiKey（已提取到 GbLlmClient，此处改为注入调用）-----------
 
     private GbQueryIntent nullIntent() {
         return GbQueryIntent.builder()
