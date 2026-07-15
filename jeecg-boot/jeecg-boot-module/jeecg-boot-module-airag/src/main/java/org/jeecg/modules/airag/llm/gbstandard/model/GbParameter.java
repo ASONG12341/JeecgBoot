@@ -45,6 +45,11 @@ public class GbParameter implements Serializable {
     @Schema(description = "单位: V/A/℃/min")
     private String unit;
 
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P1】GbParameter 增加 variables 字段（公式变量绑定，结构化存储不 eval）-----------
+    @Schema(description = "公式变量绑定 (JSON): [{\"name\":\"n\",\"desc\":\"电池串数\"}]")
+    private String variables;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P1】GbParameter 增加 variables 字段（公式变量绑定，结构化存储不 eval）-----------
+
     @Schema(description = "条件表达式")
     private String conditionExpr;
 
