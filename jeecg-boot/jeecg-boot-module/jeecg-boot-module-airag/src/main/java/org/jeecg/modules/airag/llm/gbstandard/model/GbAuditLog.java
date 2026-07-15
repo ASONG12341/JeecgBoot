@@ -35,6 +35,14 @@ public class GbAuditLog implements Serializable {
     @Schema(description = "抽取的意图 (JSON)")
     private String extractedIntent;
 
+    //update-begin---author:song ---date:2026-07-15 for：【GB-RAG v4 P1】GbAuditLog 字段对齐 DDL ---
+    @Schema(description = "路由意图 (CLAUSE_LOOKUP / PARAM_QUERY / SEMANTIC_SEARCH)")
+    private String routingIntent;
+
+    @Schema(description = "抽取的槽位 (JSON)")
+    private String extractedSlots;
+    //update-end---author:song ---date:2026-07-15 for：【GB-RAG v4 P1】GbAuditLog 字段对齐 DDL ---
+
     @Schema(description = "使用的检索通道 (JSON 数组)")
     private String retrievalChannels;
 
@@ -49,6 +57,14 @@ public class GbAuditLog implements Serializable {
 
     @Schema(description = "工具调用记录 (JSON)")
     private String toolCalls;
+
+    //update-begin---author:song ---date:2026-07-15 for：【GB-RAG v4 P1】GbAuditLog 字段对齐 DDL ---
+    @Schema(description = "端到端耗时 (毫秒)")
+    private Integer latencyMs;
+
+    @Schema(description = "是否成功")
+    private Boolean success;
+    //update-end---author:song ---date:2026-07-15 for：【GB-RAG v4 P1】GbAuditLog 字段对齐 DDL ---
 
     @Schema(description = "创建时间")
     private Date createdAt;
