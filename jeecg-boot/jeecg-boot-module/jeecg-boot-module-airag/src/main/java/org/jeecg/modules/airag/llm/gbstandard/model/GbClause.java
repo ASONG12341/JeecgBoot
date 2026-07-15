@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.util.Date;
 
 /**
@@ -61,6 +62,20 @@ public class GbClause implements Serializable {
 
     @Schema(description = "附录编号: A/B/C")
     private String appendixLabel;
+
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P1】4 个固定语义槽位（领域无关）-----------
+    @Schema(description = "槽位1-做什么: 测试类型/功能类别（领域无关）")
+    private String primaryType;
+
+    @Schema(description = "槽位2-对谁: 对象/适用物（领域无关）")
+    private String secondaryType;
+
+    @Schema(description = "槽位3-多少: 量值（领域无关）")
+    private BigDecimal quantityValue;
+
+    @Schema(description = "槽位4-什么条件: 环境条件等（领域无关）")
+    private String conditionText;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P1】4 个固定语义槽位（领域无关）-----------
 
     @Schema(description = "条款完整文本")
     private String text;
