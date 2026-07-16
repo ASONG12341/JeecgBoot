@@ -4,6 +4,7 @@ package org.jeecg.modules.airag.llm.gbstandard.ingestion;
 import lombok.extern.slf4j.Slf4j;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbClauseNode;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbDocStructure;
+import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -36,8 +37,11 @@ import java.util.regex.Pattern;
  * @author song
  * @date 2026-07-14
  */
+//update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】解析器改为 Spring Bean，便于注入测试-----------
 @Slf4j
+@Component
 public class GbDocumentStructureParser {
+//update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】解析器改为 Spring Bean，便于注入测试-----------
 
     // ==================== 正则常量 ====================
 

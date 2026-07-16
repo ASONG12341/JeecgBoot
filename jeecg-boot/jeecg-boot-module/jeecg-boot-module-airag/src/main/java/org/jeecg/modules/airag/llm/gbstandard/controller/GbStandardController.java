@@ -11,6 +11,7 @@ import org.jeecg.modules.airag.llm.consts.LLMConsts;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
 import org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties;
 import org.jeecg.modules.airag.llm.gbstandard.ingestion.GbDocumentStructureParser;
+import org.jeecg.modules.airag.llm.gbstandard.ingestion.GbIngestionPipeline;
 import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbDocStructure;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbStandard;
@@ -56,7 +57,13 @@ public class GbStandardController {
     @Value(value = "${jeecg.path.upload:}")
     private String uploadpath;
 
-    private final GbDocumentStructureParser structureParser = new GbDocumentStructureParser();
+    @Autowired
+    private GbDocumentStructureParser structureParser;
+
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】注入入库管线，confirm 触发真实抽取/向量化-----------
+    @Autowired
+    private GbIngestionPipeline ingestionPipeline;
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】注入入库管线，confirm 触发真实抽取/向量化-----------
 
     // ==================== Preview API ====================
 
@@ -180,8 +187,9 @@ public class GbStandardController {
     /**
      * 确认解析结果，触发后续管线
      * <p>
-     * Phase 1: 仅更新状态为 COMPLETED（后续管线在 Phase 2 实现）<br>
-     * Phase 2: 将触发 LLM metadata 抽取 + 参数抽取 + 引用抽取 + 向量化
+     * 状态机: PARSED → CONFIRMED → INDEXING → 触发 {@code GbIngestionPipeline}
+     * （推导 domain_schema → 批量抽取槽位/参数/引用 → 持久化条款 → 审计埋点）→ 成功置 COMPLETED。<br>
+     * 任一阶段抛异常：记日志 + 回滚到 CONFIRMED（用户修正后可重试 confirm）。
      * </p>
      *
      * @param docId 文档 ID
@@ -209,12 +217,33 @@ public class GbStandardController {
         // 更新为 CONFIRMED
         updateParseStatus(doc, LLMConsts.PARSE_STATUS_CONFIRMED);
 
-        // Phase 2 将在此处触发 LLM metadata 抽取管线
-        // Phase 1 直接标记为 COMPLETED
-        log.info("[GB知识引擎] 文档已确认, docId={}", docId);
-        updateParseStatus(doc, LLMConsts.PARSE_STATUS_COMPLETED);
+        // update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】confirm 接入入库管线（CONFIRMED→INDEXING→pipeline→COMPLETED）-----------
+        // 进入 INDEXING
+        updateParseStatus(doc, LLMConsts.PARSE_STATUS_INDEXING);
+        try {
+            // 重新解析结构树（confirm 时用户可能已 saveStructure 修正过；此处重解析保证 structure 与 markdown 一致）
+            GbStandard gbStandard = gbStandardMapper.selectOne(
+                    new LambdaQueryWrapper<GbStandard>().eq(GbStandard::getDocId, docId));
+            if (gbStandard == null) {
+                throw new IllegalStateException("gb_standard 记录不存在, docId=" + docId);
+            }
+            String markdown = resolveMarkdownContent(doc);
+            GbDocStructure structure = structureParser.parse(markdown);
 
-        return Result.OK("确认成功");
+            // 触发入库管线（推导 domain_schema → 批量抽取槽位/参数/引用 → 持久化条款 → 审计埋点）
+            ingestionPipeline.run(gbStandard, structure);
+
+            // 成功 → COMPLETED
+            updateParseStatus(doc, LLMConsts.PARSE_STATUS_COMPLETED);
+            log.info("[GB知识引擎] 文档入库完成, docId={}", docId);
+            return Result.OK("确认成功，国标结构已入库");
+        } catch (Exception e) {
+            log.error("[GB知识引擎] 文档入库失败, docId={}: {}", docId, e.getMessage(), e);
+            // 失败回滚到 CONFIRMED（用户可修正后重试 confirm）
+            updateParseStatus(doc, LLMConsts.PARSE_STATUS_CONFIRMED);
+            return Result.error("入库失败: " + e.getMessage());
+        }
+        // update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】confirm 接入入库管线-----------
     }
 
     // ==================== 私有方法 ====================
