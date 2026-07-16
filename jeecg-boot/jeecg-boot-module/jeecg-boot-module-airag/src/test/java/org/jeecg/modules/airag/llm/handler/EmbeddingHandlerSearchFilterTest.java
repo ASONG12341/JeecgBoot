@@ -9,7 +9,7 @@ import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.jeecg.ai.factory.AiModelFactory;
 import org.jeecg.ai.factory.AiModelOptions;
-import org.jeecg.modules.airag.common.handler.GbQueryIntent;
+import org.jeecg.modules.airag.llm.gbstandard.query.QueryIntent;
 import org.jeecg.modules.airag.llm.config.EmbedStoreConfigBean;
 import org.jeecg.modules.airag.llm.config.KnowConfigBean;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
@@ -42,11 +42,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 //update-begin---author:song-claude ---date:2026-07-12  for：【GB-RAG P1.1 Task 11】searchEmbedding 标量过滤 + HYBRID minScore 单元测试--------
+//update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding intent 改 QueryIntent（领域无关 4 槽位 + 通用骨架）-----------
 /**
  * EmbeddingHandler.searchEmbedding 关键路径单元测试。
  *
  * 覆盖目标：
- *  1) 传入 GbQueryIntent 后，构造出的 EmbeddingSearchRequest.filter 非空（基于 chapter/testType/nCells/clauseId/status 标量条件叠加 knowledgeId）。
+ *  1) 传入 QueryIntent 后，构造出的 EmbeddingSearchRequest.filter 非空（基于 clause_id/standard_no/amendment/primary_type/secondary_type 标量条件叠加 knowledgeId）。
  *  2) HYBRID 模式下，minScore 不等于传入的相似度阈值（HYBRID 必须忽略外部 similarity）。
  *
  * 实现说明 / 妥协说明：
@@ -132,12 +133,11 @@ class EmbeddingHandlerSearchFilterTest {
             when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
                     .thenReturn(new EmbeddingSearchResult<>(Collections.emptyList()));
 
-            GbQueryIntent intent = GbQueryIntent.builder()
-                    .inferredChapter("9")
-                    .testType("overcharge")
-                    .nCells(3)
+            QueryIntent intent = QueryIntent.builder()
+                    .secondaryType("9")
+                    .primaryType("overcharge")
                     .clauseId("9.2")
-                    .status("current")
+                    .version("2022")
                     .build();
 
             embeddingHandler.searchEmbedding(KNOW_ID, "过压充电要求", 5, 0.75, intent);
@@ -174,7 +174,7 @@ class EmbeddingHandlerSearchFilterTest {
             when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
                     .thenReturn(new EmbeddingSearchResult<>(Collections.emptyList()));
 
-            embeddingHandler.searchEmbedding(KNOW_ID, "过压充电要求", 5, 0.75, null);
+            embeddingHandler.searchEmbedding(KNOW_ID, "过压充电要求", 5, 0.75, (QueryIntent) null);
 
             ArgumentCaptor<EmbeddingSearchRequest> captor = ArgumentCaptor.forClass(EmbeddingSearchRequest.class);
             verify(embeddingStore).search(captor.capture());
@@ -210,4 +210,5 @@ class EmbeddingHandlerSearchFilterTest {
         return (ConcurrentHashMap<String, EmbeddingStore<TextSegment>>) cacheField.get(null);
     }
 }
+//update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding intent 改 QueryIntent-----------
 //update-end---author:song-claude ---date:2026-07-12  for：【GB-RAG P1.1 Task 11】searchEmbedding 标量过滤 + HYBRID minScore 单元测试--------

@@ -56,6 +56,7 @@ import org.jeecg.modules.airag.llm.entity.AiragKnowledge;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
 import org.jeecg.modules.airag.llm.entity.AiragModel;
 import org.jeecg.modules.airag.llm.extractor.GbMetadataExtractor;
+import org.jeecg.modules.airag.llm.gbstandard.query.QueryIntent;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeMapper;
 import org.jeecg.modules.airag.llm.mapper.AiragModelMapper;
 import org.jeecg.modules.airag.llm.service.IAiragKnowledgeService;
@@ -493,36 +494,43 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     }
     //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】查询扩展器懒加载（双重检查锁）--------
 
-    //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent → LangChain4j metadata Filter--------
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】buildMetadataFilter 改读 4 槽位 + 通用骨架（废弃电池键 test_type/n_cells_alias/chapter/status）-----------
     /**
-     * 在已有 filter 上叠加 GbQueryIntent 的标量过滤条件。任一字段为空则跳过该子句。
+     * 在已有 filter 上叠加 QueryIntent（领域无关，4 槽位 + 通用骨架）的标量过滤条件。
+     * <p>
+     * 过滤键对齐 P1 gb_clause 表 + airag_embedding metadata：
+     * <ul>
+     *   <li>{@code clause_id}     ← intent.clauseId（条款号，如 "9.2"）</li>
+     *   <li>{@code standard_no}   ← intent.standardNo（GB 标准号，如 "GB 31241"）</li>
+     *   <li>{@code amendment}     ← intent.version（版次/年份，如 "2022"）</li>
+     *   <li>{@code primary_type}  ← intent.primaryType（槽位1-做什么）</li>
+     *   <li>{@code secondary_type}← intent.secondaryType（槽位2-对谁）</li>
+     * </ul>
+     * 任一字段为空则跳过该子句。intent 为 null 直接返回 base。
      */
-    private Filter buildMetadataFilter(Filter base, GbQueryIntent intent) {
+    private Filter buildMetadataFilter(Filter base, QueryIntent intent) {
         Filter result = base;
         if (intent == null) {
             return result;
         }
-        if (oConvertUtils.isNotEmpty(intent.getInferredChapter())) {
-            result = new And(result, metadataKey("chapter").isEqualTo(intent.getInferredChapter()));
-        }
-        if (oConvertUtils.isNotEmpty(intent.getTestType())) {
-            result = new And(result, metadataKey("test_type").isEqualTo(intent.getTestType()));
-        }
-        if (intent.getNCells() != null) {
-            result = new And(result, metadataKey("n_cells_alias").isEqualTo(String.valueOf(intent.getNCells())));
-        }
         if (oConvertUtils.isNotEmpty(intent.getClauseId())) {
             result = new And(result, metadataKey("clause_id").isEqualTo(intent.getClauseId()));
         }
-        if (oConvertUtils.isNotEmpty(intent.getAmendment())) {
-            result = new And(result, metadataKey("amendment").isEqualTo(intent.getAmendment()));
+        if (oConvertUtils.isNotEmpty(intent.getStandardNo())) {
+            result = new And(result, metadataKey("standard_no").isEqualTo(intent.getStandardNo()));
         }
-        if (oConvertUtils.isNotEmpty(intent.getStatus())) {
-            result = new And(result, metadataKey("status").isEqualTo(intent.getStatus()));
+        if (oConvertUtils.isNotEmpty(intent.getVersion())) {
+            result = new And(result, metadataKey("amendment").isEqualTo(intent.getVersion()));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getPrimaryType())) {
+            result = new And(result, metadataKey("primary_type").isEqualTo(intent.getPrimaryType()));
+        }
+        if (oConvertUtils.isNotEmpty(intent.getSecondaryType())) {
+            result = new And(result, metadataKey("secondary_type").isEqualTo(intent.getSecondaryType()));
         }
         return result;
     }
-    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】GbQueryIntent → LangChain4j metadata Filter--------
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】buildMetadataFilter 改读 4 槽位 + 通用骨架-----------
 
     //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】Multi-Query RRF 融合--------
     /**
@@ -634,24 +642,25 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      * 向量查询（4参，保留向后兼容：内部委托 5 参重载，intent=null）
      */
     public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity) {
-        return searchEmbedding(knowId, queryText, topNumber, similarity, null);
+        return searchEmbedding(knowId, queryText, topNumber, similarity, (QueryIntent) null);
     }
 
     /**
-     * 向量查询（支持 GbQueryIntent 标量过滤 + HYBRID 模式下忽略 minScore + 可选 Multi-Query 扩展 + RRF 融合）
+     * 向量查询（支持 QueryIntent 标量过滤 + HYBRID 模式下忽略 minScore + 可选 Multi-Query 扩展 + RRF 融合）
      *
      * @param knowId    知识库 ID
      * @param queryText 查询文本
      * @param topNumber 召回条数
      * @param similarity 相似度阈值；HYBRID 模式下传 null（pgvector HYBRID 不支持 minScore 语义）
-     * @param intent    GB 查询意图（可为 null）；非 null 时叠加 chapter/test_type/n_cells_alias/clause_id/amendment/status 标量过滤
-     * @return 命中 chunks
+     * @param intent    领域无关查询意图（可为 null）；非 null 时叠加 clause_id/standard_no/amendment/primary_type/secondary_type 标量过滤
+     * @return 命中 chunks（结果 map 在原 score/content/chunk/docName/createTime 基础上额外携带 standardNo/clauseId/clausePath/primaryType）
      * @author chenrui（4 参原版）
      * @date 2025/2/18 16:52
-     * <p>P1.1 Task 9 by song-claude 2026-07-11</p>
+     * <p>P1.1 Task 9 by song-claude 2026-07-11；GB-RAG v4 P3 by song 2026-07-16（intent 改 QueryIntent + 输出 map 补 GB 键）</p>
      */
     //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】searchEmbedding 新增 GbQueryIntent 重载-------
-    public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity, GbQueryIntent intent) {
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 5 参 intent 改 QueryIntent + 输出 map 补 GB 键（修 VectorChannel 空字段）-----------
+    public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity, QueryIntent intent) {
         AssertUtils.assertNotEmpty("请选择知识库", knowId);
         AiragKnowledge knowledge = airagKnowledgeMapper.getByIdIgnoreTenant(knowId);
         AssertUtils.assertNotEmpty("知识库不存在", knowledge);
@@ -668,7 +677,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
         Filter filter = metadataKey(EMBED_STORE_METADATA_KNOWLEDGEID).isEqualTo(knowId);
 
-        // P1.1 Task 9: 叠加 GbQueryIntent 标量过滤
+        // P1.1 Task 9 / GB-RAG v4 P3: 叠加 QueryIntent 标量过滤
         filter = buildMetadataFilter(filter, intent);
 
         // 记忆库的时候需要根据用户隔离
@@ -746,12 +755,51 @@ public class EmbeddingHandler implements IEmbeddingHandler {
                 //查询返回的时候增加创建时间，用于排序
                 String ct = metadata.getString(EMBED_STORE_CREATE_TIME);
                 data.put(EMBED_STORE_CREATE_TIME, ct);
+                //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】输出 map 补 GB 元数据键（修 VectorChannel convertToRetrievalResult 读取 null 字段的数据流断裂）-----------
+                // VectorChannel.convertToRetrievalResult 直接从 searchResult map 顶层读 standardNo/clauseId/clausePath/primaryType，
+                // 而原输出 map 只有 score/content/chunk/docName/createTime 5 个键 → 全部读到 null。
+                // 此处把 embedding match metadata 中的 snake_case 键映射为 camelCase 写到 map 顶层。
+                String standardNo = metadata.getString("standard_no");
+                if (standardNo != null) {
+                    data.put("standardNo", standardNo);
+                }
+                String clauseId = metadata.getString("clause_id");
+                if (clauseId != null) {
+                    data.put("clauseId", clauseId);
+                }
+                String clausePath = metadata.getString("clause_path");
+                if (clausePath != null) {
+                    data.put("clausePath", clausePath);
+                }
+                String primaryType = metadata.getString("primary_type");
+                if (primaryType != null) {
+                    data.put("primaryType", primaryType);
+                }
+                //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】输出 map 补 GB 元数据键（修 VectorChannel 数据流断裂）-----------
                 return data;
             }).collect(Collectors.toList());
         }
         return result;
     }
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 5 参 intent 改 QueryIntent + 输出 map 补 GB 键-----------
     //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】searchEmbedding 新增 GbQueryIntent 重载-------
+
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 桥接重载（保留 GbQueryIntent 入参，内部转换后委托 QueryIntent 版）-----------
+    /**
+     * 向后兼容桥接重载：接收旧 GbQueryIntent（AIChatHandler.mergeParams:398 经 IntentContext.get() 取出），
+     * 内部转换为领域无关的 QueryIntent 后委托 5 参 QueryIntent 版本。
+     * <p>
+     * 设计动机：Task 4 仅修改 EmbeddingHandler 一处文件。AIChatHandler + IntentContext 仍使用 GbQueryIntent
+     * （由 IGbIntentExtractor 抽取）。直接改 EmbeddingHandler.getQueryRouter 签名会让 AIChatHandler 编译失败，
+     * 此桥接方法用最小 blast radius 完成 QueryIntent 切换。后续 Task 完整迁移 IntentContext 后可删除。
+     * <p>
+     * 映射：clauseId→clauseId / amendment→version / testType→primaryType / inferredChapter→secondaryType（章节号降级到槽位2）。
+     * 其余旧字段（nCells/status/objectType）暂不映射到 QueryIntent 槽位（domain_schema 重新表达）。
+     */
+    public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity, GbQueryIntent legacyIntent) {
+        return searchEmbedding(knowId, queryText, topNumber, similarity, toQueryIntent(legacyIntent));
+    }
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 桥接重载-----------
 
     /**
      * 获取向量查询路由
@@ -765,15 +813,16 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      */
     @Override
     public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity) {
-        return getQueryRouter(knowIds, topNumber, similarity, null);
+        return getQueryRouter(knowIds, topNumber, similarity, (QueryIntent) null);
     }
 
     //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】getQueryRouter 4 参 intent 改 QueryIntent + 保留 GbQueryIntent 桥接重载-----------
     /**
-     * 4参重载：构造 EmbeddingStoreContentRetriever 时传入 GbQueryIntent 的标量过滤，
+     * 4参重载（QueryIntent 版）：构造 EmbeddingStoreContentRetriever 时叠加 QueryIntent（领域无关，4 槽位 + 通用骨架）的标量过滤，
      * 以及 HYBRID 模式下不传 minScore。
      */
-    public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, GbQueryIntent intent) {
+    public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, QueryIntent intent) {
         AssertUtils.assertNotEmpty("请选择知识库", knowIds);
         //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
         log.info("[RAG][getQueryRouter] 进入构建 queryRouter, 知识库IDs={}, 召回条数={}, 相似度阈值={}", knowIds, topNumber, similarity);
@@ -812,7 +861,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
 
             //update-begin---author:wangshuai---date:2025-12-26---for:【QQYUN-14265】【AI】支持记忆---
             Filter filter = metadataKey(EMBED_STORE_METADATA_KNOWLEDGEID).isEqualTo(knowId);
-            // P1.1 Task 9: 叠加 GbQueryIntent 标量过滤
+            // P1.1 Task 9 / GB-RAG v4 P3: 叠加 QueryIntent 标量过滤
             filter = buildMetadataFilter(filter, intent);
             // 记忆库的时候需要根据用户隔离
             if (LLMConsts.KNOWLEDGE_TYPE_MEMORY.equalsIgnoreCase(knowledge.getType())) {
@@ -860,6 +909,50 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         }
     }
     //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------
+
+    /**
+     * 向后兼容桥接重载：接收旧 GbQueryIntent（AIChatHandler.mergeParams:398 经 IntentContext.get() 取出），
+     * 内部转换为领域无关的 QueryIntent 后委托 4 参 QueryIntent 版本。动机与 searchEmbedding 桥接重载相同（最小 blast radius）。
+     */
+    public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, GbQueryIntent legacyIntent) {
+        return getQueryRouter(knowIds, topNumber, similarity, toQueryIntent(legacyIntent));
+    }
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】getQueryRouter 4 参 intent 改 QueryIntent + 保留 GbQueryIntent 桥接重载-----------
+
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】GbQueryIntent → QueryIntent 桥接转换器（供 searchEmbedding / getQueryRouter 的 GbQueryIntent 重载复用）-----------
+    /**
+     * GbQueryIntent → QueryIntent 适配器。
+     * <p>
+     * 字段映射（覆盖通用骨架可对应项）：
+     * <ul>
+     *   <li>clauseId → clauseId（直接保留）</li>
+     *   <li>amendment → version（版次语义对齐）</li>
+     *   <li>testType → primaryType（测试类型降级为槽位1-做什么）</li>
+     *   <li>inferredChapter → secondaryType（章节号降级为槽位2-对谁，仅供过滤，语义不完美但保持召回）</li>
+     * </ul>
+     * 未映射字段：nCells/status/objectType（领域专属，QueryIntent 4 槽位表达不了，由后续 domain_schema 重新表达）。
+     * 输入 null 返回 null（调用方 buildMetadataFilter 自带 null 防护）。
+     */
+    private QueryIntent toQueryIntent(GbQueryIntent legacy) {
+        if (legacy == null) {
+            return null;
+        }
+        QueryIntent.QueryIntentBuilder b = QueryIntent.builder();
+        if (oConvertUtils.isNotEmpty(legacy.getClauseId())) {
+            b.clauseId(legacy.getClauseId());
+        }
+        if (oConvertUtils.isNotEmpty(legacy.getAmendment())) {
+            b.version(legacy.getAmendment());
+        }
+        if (oConvertUtils.isNotEmpty(legacy.getTestType())) {
+            b.primaryType(legacy.getTestType());
+        }
+        if (oConvertUtils.isNotEmpty(legacy.getInferredChapter())) {
+            b.secondaryType(legacy.getInferredChapter());
+        }
+        return b.build();
+    }
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】GbQueryIntent → QueryIntent 桥接转换器-----------
 
     /**
      * 删除向量化文档
