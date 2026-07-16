@@ -15,7 +15,7 @@ import java.math.BigDecimal;
  * <p>
  * 通用骨架字段：所有技术规范共享（standardNo/clauseId/version/objectType/isBooleanQuery）。
  * 4 个固定语义槽位：做什么/对谁/多少/什么条件，值由 LLM 按 domain_schema 填充。
- * 替代旧 GbQueryIntent（电池专属 POJO）。领域差异全部下沉到 domain_schema 数据。
+ * 替代旧 GbQueryIntent（领域专属 POJO）。领域差异全部下沉到 domain_schema 数据。
  * </p>
  *
  * @author song
