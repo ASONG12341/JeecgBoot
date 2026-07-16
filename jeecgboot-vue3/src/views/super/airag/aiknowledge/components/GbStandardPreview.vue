@@ -23,16 +23,16 @@
           </div>
           <div class="gb-pdf-area">
             <div v-if="pdfUrl" class="gb-pdf-content">
-              <!-- PDF.js 渲染区域 — 后续集成 pdf.js -->
-              <div class="gb-pdf-placeholder">
-                <a-icon type="file-pdf" style="font-size: 48px; color: #ccc;" />
-                <p>PDF 预览区域</p>
-                <p class="text-gray-400 text-sm">{{ pdfUrl }}</p>
-                <p class="text-gray-400 text-xs mt-2">
-                  提示: PDF.js 集成将在后续版本完善。<br>
-                  当前可使用右侧解析结果进行校对。
-                </p>
+              <!-- PDF.js 渲染区域：update-begin author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js -->
+              <div v-if="pdfLoading" class="gb-pdf-placeholder">
+                <a-spin tip="正在加载 PDF..." />
               </div>
+              <div v-else-if="pdfError" class="gb-pdf-placeholder">
+                <a-icon type="file-exclamation" style="font-size: 48px; color: #ffccc7;" />
+                <p class="text-red-500 text-sm mt-2">PDF 加载失败</p>
+                <p class="text-gray-400 text-xs">{{ pdfError }}</p>
+              </div>
+              <canvas v-show="!pdfLoading && !pdfError" ref="pdfCanvas" class="gb-pdf-canvas" />
             </div>
             <div v-else class="gb-no-pdf">
               <a-empty description="暂无 PDF 文件路径" />
@@ -155,10 +155,11 @@
 </template>
 
 <script lang="ts" setup>
-  import { ref, computed, watch } from 'vue';
+  import { ref, computed, watch, onBeforeUnmount, shallowRef, nextTick } from 'vue';
   import { BasicModal, useModalInner } from '/@/components/Modal';
   import { previewGbStandard, confirmGbStandard } from '../GbStandardPreview.api';
   import { useMessage } from '/@/hooks/web/useMessage';
+  import { loadPdf, type PdfDocument } from '../utils/pdf';
 
   const { createMessage } = useMessage();
 
@@ -179,6 +180,17 @@
   const currentPage = ref(1);
   const totalPages = ref(1);
   const searchText = ref('');
+
+  // ==================== PDF.js 相关状态 ====================
+  // update-begin author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
+  // shallowRef：PDFDocumentProxy 是大型复杂对象，避免响应式深度代理带来开销
+  const pdfDoc = shallowRef<PdfDocument | null>(null);
+  const pdfCanvas = ref<HTMLCanvasElement | null>(null);
+  const pdfLoading = ref(false);
+  const pdfError = ref('');
+  // 渲染锁：防止连续翻页触发多次并发渲染（renderPage 内部有取消，这里再加一道 watch 屏蔽）
+  let renderingPromise: Promise<void> | null = null;
+  // update-end author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
 
   // ==================== 计算属性 ====================
 
@@ -280,6 +292,64 @@
     if (currentPage.value < totalPages.value) currentPage.value++;
   }
 
+  // ==================== PDF.js 渲染逻辑 ====================
+  // update-begin author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
+
+  /** 渲染当前页（currentPage）到 canvas；忽略并发重复渲染 */
+  async function renderCurrentPage() {
+    const doc = pdfDoc.value;
+    const canvas = pdfCanvas.value;
+    if (!doc || !canvas) return;
+    const p = currentPage.value;
+    if (p < 1 || p > doc.numPages) return;
+
+    const task = (async () => {
+      await doc.renderPage(p, canvas);
+    })();
+    renderingPromise = task;
+    try {
+      await task;
+    } catch (e: any) {
+      // 渲染取消 / canvas 已被销毁 属正常情况
+      console.warn('[GbStandardPreview] PDF 渲染失败', e?.message || e);
+    } finally {
+      if (renderingPromise === task) renderingPromise = null;
+    }
+  }
+
+  /** 加载 PDF 并设置总页数、渲染首页 */
+  async function loadAndRenderPdf(url: string) {
+    if (!url) return;
+    // 释放上一次的 PDF 文档
+    if (pdfDoc.value) {
+      try {
+        await pdfDoc.value.destroy();
+      } catch {
+        /* ignore */
+      }
+      pdfDoc.value = null;
+    }
+    pdfLoading.value = true;
+    pdfError.value = '';
+    try {
+      const doc = await loadPdf(url);
+      pdfDoc.value = doc;
+      totalPages.value = doc.numPages;
+      // 修正越界的当前页
+      if (currentPage.value > doc.numPages) currentPage.value = doc.numPages;
+      if (currentPage.value < 1) currentPage.value = 1;
+      // 等 canvas 渲染到 DOM（v-show 控制，已在 DOM 中）后渲染首页
+      await nextTick();
+      await renderCurrentPage();
+    } catch (e: any) {
+      console.error('[GbStandardPreview] PDF 加载失败', e);
+      pdfError.value = e?.message || String(e);
+    } finally {
+      pdfLoading.value = false;
+    }
+  }
+  // update-end author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
+
   async function doPreview() {
     if (!props.docId) return;
     loading.value = true;
@@ -330,6 +400,48 @@
     },
     { immediate: true },
   );
+
+  // update-begin author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
+  // pdfUrl 变化 → 加载 PDF（Modal 打开时 props 传入或外部变更都会触发）
+  watch(
+    () => props.pdfUrl,
+    (newVal) => {
+      if (newVal) {
+        currentPage.value = 1;
+        loadAndRenderPdf(newVal);
+      } else {
+        // 清空 PDF 状态
+        if (pdfDoc.value) {
+          pdfDoc.value.destroy().catch(() => {});
+          pdfDoc.value = null;
+        }
+        totalPages.value = 1;
+        currentPage.value = 1;
+        pdfError.value = '';
+      }
+    },
+    { immediate: true },
+  );
+
+  // currentPage 变化 → 重新渲染（覆盖翻页按钮 + 条款树点击跳页两个入口）
+  watch(
+    currentPage,
+    () => {
+      // 等待 doc / canvas 就绪后渲染
+      if (pdfDoc.value && pdfCanvas.value && !pdfLoading.value) {
+        renderCurrentPage();
+      }
+    },
+  );
+
+  // 卸载前释放 PDF 资源
+  onBeforeUnmount(() => {
+    if (pdfDoc.value) {
+      pdfDoc.value.destroy().catch(() => {});
+      pdfDoc.value = null;
+    }
+  });
+  // update-end author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js
 </script>
 
 <style scoped>
@@ -394,6 +506,21 @@
     height: 100%;
     color: #999;
   }
+
+  /* update-begin author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js */
+  .gb-pdf-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+  }
+
+  .gb-pdf-canvas {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    background: #fff;
+    max-width: 100%;
+  }
+  /* update-end author=song date=2026-07-16 for GB-RAG v4 P2 接入 PDF.js */
 
   .gb-no-pdf {
     display: flex;
