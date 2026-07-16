@@ -39,6 +39,7 @@ class GbIngestionPipelineTest {
     @Mock private GbAuditLogRepository auditLogRepository;
     @Mock private GbStandardMapper gbStandardMapper;
     @Mock private ObjectMapper objectMapper;
+    @Mock private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig;
 
     @Test
     void runShouldDeriveExtractPersistAndAuditInOrder() {
@@ -52,6 +53,7 @@ class GbIngestionPipelineTest {
         structure.setClauses(List.of(node));
 
         when(schemaDeriver.derive(any())).thenReturn(new DomainSchema());
+        when(clauseMetadataConfig.getBatchSize()).thenReturn(10);
         BatchExtractResult result = new BatchExtractResult();
         result.setClausePath("9.2");
         result.setPrimaryType("overcharge");

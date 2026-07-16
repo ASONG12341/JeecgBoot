@@ -40,6 +40,7 @@ public class GbIngestionPipeline {
     @Autowired private GbAuditLogRepository auditLogRepository;
     @Autowired private GbStandardMapper gbStandardMapper;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig;
 
     public boolean run(GbStandard standard, GbDocStructure structure) {
         GbAuditLog audit = new GbAuditLog();
@@ -54,7 +55,7 @@ public class GbIngestionPipeline {
 
             // 2. 扁平化条款树 + 分批抽取
             List<GbClauseNode> flatClauses = flatten(structure != null ? structure.getClauses() : Collections.emptyList());
-            int batchSize = 10; // 从 config 取（实施时注入 ClauseMetadataExtractor.batchSize）
+            int batchSize = Math.max(1, clauseMetadataConfig.getBatchSize()); // 从配置读取，防御性下限 1
             List<BatchExtractResult> allResults = new ArrayList<>();
             for (int i = 0; i < flatClauses.size(); i += batchSize) {
                 List<GbClauseNode> batch = flatClauses.subList(i, Math.min(i + batchSize, flatClauses.size()));
