@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -59,12 +60,13 @@ class GbIngestionPipelineTest {
 
         pipeline.run(standard, structure);
 
-        // 验证编排顺序
-        verify(schemaDeriver).derive(any());                       // 1. 推导 schema
-        verify(gbStandardMapper).updateById(any(GbStandard.class)); // 2. 存 domain_schema
-        verify(batchExtractor).extractBatch(any(), any());          // 3. 批量抽取
-        verify(clauseRepository).saveBatch(eq("std-1"), any());     // 4. 持久化条款
-        verify(auditLogRepository).save(any());                     // 5. 审计埋点
+        // 验证编排顺序（严格 InOrder，确保 derive→updateById→extractBatch→saveBatch→audit）
+        org.mockito.InOrder o = Mockito.inOrder(schemaDeriver, gbStandardMapper, batchExtractor, clauseRepository, auditLogRepository);
+        o.verify(schemaDeriver).derive(any());                       // 1. 推导 schema
+        o.verify(gbStandardMapper).updateById(any(GbStandard.class)); // 2. 存 domain_schema
+        o.verify(batchExtractor).extractBatch(any(), any());          // 3. 批量抽取
+        o.verify(clauseRepository).saveBatch(eq("std-1"), any());     // 4. 持久化条款
+        o.verify(auditLogRepository).save(any());                     // 5. 审计埋点
     }
 
     @Test
