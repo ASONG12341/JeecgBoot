@@ -278,4 +278,19 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skipTests>false</skipTests>
+                    <systemPropertyVariables>
+                        <langchain4j.http.clientBuilderFactory>dev.langchain4j.http.client.jdk.JdkHttpClientBuilderFactory</langchain4j.http.clientBuilderFactory>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>
