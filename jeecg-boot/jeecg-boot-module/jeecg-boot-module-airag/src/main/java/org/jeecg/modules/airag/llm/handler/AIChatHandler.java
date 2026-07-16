@@ -19,12 +19,14 @@ import org.jeecg.config.AiChatConfig;
 import org.jeecg.config.AiRagConfigBean;
 import org.jeecg.modules.airag.common.consts.AiragConsts;
 import org.jeecg.modules.airag.common.handler.AIChatParams;
-import org.jeecg.modules.airag.common.handler.GbQueryIntent;
 import org.jeecg.modules.airag.common.handler.IAIChatHandler;
 import org.jeecg.modules.airag.common.handler.IGbIntentExtractor;
-import org.jeecg.modules.airag.common.handler.IntentContext;
 import org.jeecg.modules.airag.common.handler.McpToolProviderWrapper;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
+//update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 切换 QueryIntent（废弃 IntentContext ThreadLocal）-----------
+import org.jeecg.modules.airag.llm.gbstandard.query.QueryIntent;
+import org.jeecg.modules.airag.llm.gbstandard.query.QueryIntentExtractor;
+//update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 切换 QueryIntent（废弃 IntentContext ThreadLocal）-----------
 import org.jeecg.modules.airag.llm.entity.AiragMcp;
 import org.jeecg.modules.airag.llm.entity.AiragModel;
 import org.jeecg.modules.airag.llm.mapper.AiragMcpMapper;
@@ -77,6 +79,10 @@ public class AIChatHandler implements IAIChatHandler {
     @Autowired
     private IGbIntentExtractor gbIntentExtractor;
     // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】AIChatHandler 注入 IGbIntentExtractor（v3.1 §4.3.4 要求在 mergeParams 同步抽取 intent）-----------
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 注入领域无关 QueryIntentExtractor（extractIntent 改用它；gbIntentExtractor 暂留待 Task 9 删除旧类）-----------
+    @Autowired
+    private QueryIntentExtractor queryIntentExtractor;
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 注入领域无关 QueryIntentExtractor（extractIntent 改用它；gbIntentExtractor 暂留待 Task 9 删除旧类）-----------
 
     /**
      * 问答
@@ -127,20 +133,24 @@ public class AIChatHandler implements IAIChatHandler {
      */
     public String completions(AiragModel airagModel, List<ChatMessage> messages, AIChatParams params) {
         //update-begin---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】completions 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
-        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1 Task 10 的 IntentContext.get() 永远 null)
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent 返回 QueryIntent 显式传参（废弃 IntentContext ThreadLocal；load-bearing 顺序不变：extractIntent 仍在 mergeParams 之前）-----------
+        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1-3 标量过滤拿不到 intent)
+        QueryIntent intent = null;
         try {
-            extractAndCacheIntent("completions", messages, params);
+            intent = extractIntent("completions", messages, params);
         } catch (Exception e) {
             log.warn("[AI-CHAT][completions] 预抽取 intent 失败, 继续主流程", e);
         }
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent 返回 QueryIntent 显式传参（废弃 IntentContext ThreadLocal；load-bearing 顺序不变：extractIntent 仍在 mergeParams 之前）-----------
         //update-end---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】completions 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
 
-        params = mergeParams(airagModel, params);
+        params = mergeParams(airagModel, params, intent);
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
 
         // update-begin---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】completions 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】finally 不再 clear IntentContext（已废弃，无 ThreadLocal 写入）；仅保留 closeMcpConnections-----------
         String resp = null;
         try {
             try {
@@ -161,11 +171,11 @@ public class AIChatHandler implements IAIChatHandler {
             }
             return resp;
         } finally {
-            IntentContext.clear();
             // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions finally 关闭 MCP 连接（防御式：即使 llmHandler 内部已关闭也幂等；防止 MCP 客户端连接泄漏）-----------
             closeMcpConnections(params);
             // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】completions finally 关闭 MCP 连接（防御式：即使 llmHandler 内部已关闭也幂等；防止 MCP 客户端连接泄漏）-----------
         }
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】finally 不再 clear IntentContext（已废弃，无 ThreadLocal 写入）；仅保留 closeMcpConnections-----------
         // update-end---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】completions 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
     }
 
@@ -235,28 +245,32 @@ public class AIChatHandler implements IAIChatHandler {
      */
     private TokenStream chat(AiragModel airagModel, List<ChatMessage> messages, AIChatParams params) {
         //update-begin---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】流式 chat 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
-        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1 Task 10 的 IntentContext.get() 永远 null)
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent 返回 QueryIntent 显式传参（废弃 IntentContext ThreadLocal；load-bearing 顺序不变：extractIntent 仍在 mergeParams 之前）-----------
+        // 预抽取 intent(必须在 mergeParams 之前,否则 P1.1-3 标量过滤拿不到 intent)
+        QueryIntent intent = null;
         try {
-            extractAndCacheIntent("chat", messages, params);
+            intent = extractIntent("chat", messages, params);
         } catch (Exception e) {
             log.warn("[AI-CHAT][chat] 预抽取 intent 失败, 继续主流程", e);
         }
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent 返回 QueryIntent 显式传参（废弃 IntentContext ThreadLocal；load-bearing 顺序不变：extractIntent 仍在 mergeParams 之前）-----------
         //update-end---author:song-claude ---date:2026-07-12  for：【修复 P1.2 阶段 mergeParams 顺序错位】流式 chat 抽取 intent 上移到 mergeParams 之前(IntentContext.get() 在 mergeParams 内非 null,P1.1-3 标量过滤生效)-----------
 
-        params = mergeParams(airagModel, params);
+        params = mergeParams(airagModel, params, intent);
         //update-begin---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
         messages = injectThinkingPlaceholderIfNeeded(messages, airagModel.getModelName());
         //update-end---author:scott ---date:20260429  for：[issues/9585]DeepSeek大模型切换为新发布deepseek-v4-flash，流程中调用出现异常------------
 
         // update-begin---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】流式 chat 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】finally 不再 clear IntentContext（已废弃，无 ThreadLocal 写入）；仅保留 closeMcpConnections-----------
         try {
             return llmHandler.chat(messages, params);
         } finally {
-            IntentContext.clear();
             // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat finally 关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会；流式消费完成后的连接关闭依赖 llmHandler 内部 / 后续 P1.3 阶段处理）-----------
             closeMcpConnections(params);
             // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】流式 chat finally 关闭 MCP 连接（流式 TokenStream 启动前的最后一次同步清理机会；流式消费完成后的连接关闭依赖 llmHandler 内部 / 后续 P1.3 阶段处理）-----------
         }
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】finally 不再 clear IntentContext（已废弃，无 ThreadLocal 写入）；仅保留 closeMcpConnections-----------
         // update-end---author:song-claude ---date:2026-07-12  for：【v3.1 P1.2】流式 chat 同步抽取 intent 已上移到 mergeParams 之前;此处保留 closeMcpConnections finally 块(语义不变)-----------
     }
 
@@ -336,6 +350,25 @@ public class AIChatHandler implements IAIChatHandler {
      * @date 2025/3/11 17:45
      */
     private AIChatParams mergeParams(AiragModel airagModel, AIChatParams params) {
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】保留 2 参重载（imageGenerate/imageEdit 无 RAG intent，传 null），3 参重载承载 chat/completions 的 QueryIntent 透传-----------
+        return mergeParams(airagModel, params, null);
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】保留 2 参重载（imageGenerate/imageEdit 无 RAG intent，传 null），3 参重载承载 chat/completions 的 QueryIntent 透传-----------
+    }
+
+    /**
+     * 合并 airagmodel和params,params为准；并把 QueryIntent 透传给 queryRouter 构建。
+     *
+     * <p>GB-RAG v4 P3：intent 由调用方（completions/chat）在 mergeParams 之前用 extractIntent 抽取并通过参数传入，
+     * 替代旧的 IntentContext.get() ThreadLocal 读取。load-bearing 顺序：extractIntent 必须在 mergeParams 之前。
+     *
+     * @param airagModel 模型
+     * @param params     参数（含 knowIds）
+     * @param intent     预抽取的 QueryIntent（可为 null：无 RAG 上下文 / 抽取失败 / 图像生成场景）
+     * @return 合并后的 params
+     * @author song
+     * @date 2026-07-16
+     */
+    private AIChatParams mergeParams(AiragModel airagModel, AIChatParams params, QueryIntent intent) {
         if (null == airagModel) {
             return params;
         }
@@ -394,8 +427,9 @@ public class AIChatHandler implements IAIChatHandler {
         if (oConvertUtils.isObjectNotEmpty(knowIds)) {
             try {
                 //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 10】AIChatHandler.mergeParams 从 IntentContext 读取 intent 并传入 getQueryRouter 重载（避免在 mergeParams 再调一次 extractWithFallback 触发重复 LLM 调用）-----------
-                GbQueryIntent intent = IntentContext.get();
-                QueryRouter queryRouter = embeddingHandler.getQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity(), intent);
+                //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】mergeParams 不再读 IntentContext.get()，改用参数传入的 QueryIntent；通过 package-private buildQueryRouter 委托 embeddingHandler.getQueryRouter(QueryIntent 重载)，便于单测-----------
+                QueryRouter queryRouter = buildQueryRouter(knowIds, params.getTopNumber(), params.getSimilarity(), intent);
+                //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】mergeParams 不再读 IntentContext.get()，改用参数传入的 QueryIntent；通过 package-private buildQueryRouter 委托 embeddingHandler.getQueryRouter(QueryIntent 重载)，便于单测-----------
                 //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 10】AIChatHandler.mergeParams 从 IntentContext 读取 intent 并传入 getQueryRouter 重载（避免在 mergeParams 再调一次 extractWithFallback 触发重复 LLM 调用）-----------
                 params.setQueryRouter(queryRouter);
                 //update-begin---author:song ---date:2026-07-10  for：【issues/9551】RAG 检索可观测日志，定位 queryRouter 是否真的被注入-----------
@@ -474,13 +508,19 @@ public class AIChatHandler implements IAIChatHandler {
     }
 
     /**
-     * 统一 intent 抽取方法（DRY 重构，v3.1 P1.2）：从 messages 提取 userQuery，
-     * 调 IGbIntentExtractor.extractWithFallback，结果暂存 IntentContext（ThreadLocal）。
+     * 统一 intent 抽取方法（DRY 重构，v3.1 P1.2；GB-RAG v4 P3 改写）：从 messages 提取 userQuery，
+     * 调 QueryIntentExtractor.extractWithFallback，返回领域无关 {@link QueryIntent}（不写 ThreadLocal）。
+     *
+     * <p>GB-RAG v4 P3 变更：
+     * <ul>
+     *   <li>抽取器由 IGbIntentExtractor → QueryIntentExtractor（领域无关）。</li>
+     *   <li>结果通过返回值显式传参给 mergeParams，废弃 IntentContext ThreadLocal。</li>
+     * </ul>
      *
      * 调用方（completions / chat）通过 caller 参数区分日志 tag。
-     * 失败不影响主流程（log warn 后继续；IntentContext 保持前次值或 null）。
+     * 失败不影响主流程（catch 后返回 null）。
      *
-     * 触发条件（任一命中即静默返回）：
+     * 触发条件（任一命中即静默返回 null）：
      * 1. params.getKnowIds() 为空（无 RAG 上下文）
      * 2. messages 为空（无用户输入）
      * 3. 最后一条非 UserMessage
@@ -489,12 +529,11 @@ public class AIChatHandler implements IAIChatHandler {
      *
      * 性能优化（review 风险 4）：
      * - GB_PATTERN 正则预检：无 GB 标准号的问题直接跳过，节省一次 LLM Structured Output 调用（~200-500ms 延迟）
-     * - 短时缓存（userQuery+knowIds → intent，Caffeine TTL 5 分钟）：同类问题复用，
-     *   由 P1.3 阶段实施（需引入 Caffeine 或 Redis 依赖，超 P1.2 范围）
      *
      * @param caller   调用方标识（"completions" / "chat"）
      * @param messages 当前 chat 的消息列表
      * @param params   AIChatParams（含 knowIds）
+     * @return 抽取到的 QueryIntent；未触发/失败/无 GB 标准号时返回 null
      */
     /**
      * GB 标准号正则预检（review 风险 4）。
@@ -502,29 +541,49 @@ public class AIChatHandler implements IAIChatHandler {
      */
     private static final java.util.regex.Pattern GB_PATTERN = java.util.regex.Pattern.compile("GB[\\s/]*T?[\\s/]*\\d+(?:\\.\\d+)?(?:[-/]\\d+)?");
 
-    private void extractAndCacheIntent(String caller, List<ChatMessage> messages, AIChatParams params) {
+    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent：返回 QueryIntent，不写 IntentContext ThreadLocal；改用领域无关 QueryIntentExtractor-----------
+    private QueryIntent extractIntent(String caller, List<ChatMessage> messages, AIChatParams params) {
         List<String> knowIds = params.getKnowIds();
         if (knowIds == null || knowIds.isEmpty()) {
-            return;
+            return null;
         }
         String userQuery = extractLastUserQuery(messages);
         if (userQuery == null || userQuery.trim().isEmpty()) {
-            return;
+            return null;
         }
         // GB 标准号正则预检：无关问题跳过 LLM 调用（review 风险 4 性能优化）
         if (!GB_PATTERN.matcher(userQuery).find()) {
             log.debug("[RAG][{}] 用户问题未匹配到 GB 标准号（pattern={}），跳过 intent 抽取", caller, GB_PATTERN.pattern());
-            return;
+            return null;
         }
         try {
-            GbQueryIntent intent = gbIntentExtractor.extractWithFallback(userQuery, knowIds);
-            IntentContext.set(intent);
-            // review 优化 2：GbQueryIntent 已有 @Data 自动含 @ToString，直接用 {} 模板简化日志
-            log.info("[RAG][{}] intent 已抽取并暂存 IntentContext: intent={}, knowIds={}", caller, intent, knowIds);
+            QueryIntent intent = queryIntentExtractor.extractWithFallback(userQuery, knowIds);
+            log.info("[RAG][{}] QueryIntent 抽取成功: intent={}, knowIds={}", caller, intent, knowIds);
+            return intent;
         } catch (Exception e) {
-            // intent 抽取失败不影响 chat 主流程；只 log warn，IntentContext 不更新
-            log.warn("[RAG][{}] intent 抽取失败, knowIds={}, 错误={}", caller, knowIds, e.getMessage());
+            // intent 抽取失败不影响 chat 主流程；只 log warn，返回 null
+            log.warn("[RAG][{}] QueryIntent 抽取失败, knowIds={}, 错误={}", caller, knowIds, e.getMessage());
+            return null;
         }
+    }
+    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】extractAndCacheIntent → extractIntent：返回 QueryIntent，不写 IntentContext ThreadLocal；改用领域无关 QueryIntentExtractor-----------
+
+    /**
+     * package-private 辅助方法（GB-RAG v4 P3 测试性）：把 QueryIntent 委托给
+     * {@link EmbeddingHandler#getQueryRouter(List, Integer, Double, QueryIntent)}（使用 QueryIntent 重载，非旧 GbQueryIntent 桥接重载）。
+     *
+     * <p>抽取目的：AIChatHandler 字段很多（airagModelMapper / llmHandler / aiChatConfig …），
+     * 难以在单测里全部 @InjectMocks。把 intent→router 的委托点隔离到这个 package-private 方法，
+     * 单测只需 mock EmbeddingHandler 即可验证"用对了 getQueryRouter 重载 + intent 透传"。
+     *
+     * @param knowIds   知识库 id 列表
+     * @param topNumber 召回条数
+     * @param similarity 相似度阈值
+     * @param intent    预抽取的 QueryIntent（可为 null）
+     * @return 构建好的 QueryRouter（可能为 null）
+     */
+    QueryRouter buildQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, QueryIntent intent) {
+        return embeddingHandler.getQueryRouter(knowIds, topNumber, similarity, intent);
     }
     // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】extractLastUserQuery 辅助方法 + extractAndCacheIntent 统一方法（DRY 重构：completions + chat 共享）-----------
 
