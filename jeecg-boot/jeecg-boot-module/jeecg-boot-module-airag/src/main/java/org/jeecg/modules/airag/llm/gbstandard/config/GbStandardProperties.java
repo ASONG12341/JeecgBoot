@@ -50,5 +50,32 @@ public class GbStandardProperties {
          */
         private boolean llmFallback = false;
     }
+
+    //update-begin---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】schema-deriver + clause-metadata-extractor 配置子节-----------
+    @Data
+    public static class SchemaDeriver {
+        /** 是否启用 domain_schema 推导（默认 true） */
+        private boolean enabled = true;
+        /** 推导用的轻量模型名 */
+        private String modelName = "qwen-flash";
+        /** 单次调用超时（秒） */
+        private int timeoutSeconds = 10;
+    }
+
+    @Data
+    public static class ClauseMetadataExtractor {
+        /** 是否启用条款批量抽取（默认 true） */
+        private boolean enabled = true;
+        /** 每批打包的条款数 */
+        private int batchSize = 10;
+        /** 抽取用的模型名 */
+        private String modelName = "qwen-flash";
+        /** 单次调用超时（秒，批量调用给足时间） */
+        private int timeoutSeconds = 30;
+    }
+
+    private SchemaDeriver schemaDeriver = new SchemaDeriver();
+    private ClauseMetadataExtractor clauseMetadataExtractor = new ClauseMetadataExtractor();
+    //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】schema-deriver + clause-metadata-extractor 配置子节-----------
 }
 //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 配置属性类 + Kill Switch-----------
