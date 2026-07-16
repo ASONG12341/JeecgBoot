@@ -41,10 +41,11 @@ public class GbIngestionPipeline {
     @Autowired private GbStandardMapper gbStandardMapper;
     @Autowired private ObjectMapper objectMapper;
 
-    public void run(GbStandard standard, GbDocStructure structure) {
+    public boolean run(GbStandard standard, GbDocStructure structure) {
         GbAuditLog audit = new GbAuditLog();
         audit.setSessionId("ingest-" + standard.getId());
         audit.setRetrievedClauses(structure != null ? String.valueOf(structure.getTotalClauseCount()) : "0");
+        boolean success = false;
         try {
             // 1. 推导 domain_schema
             DomainSchema schema = schemaDeriver.derive(extractIntro(structure, standard));
@@ -72,6 +73,7 @@ public class GbIngestionPipeline {
             // 4. 参数 + 引用（实施时从 results 收集，存 gb_parameter/gb_reference）
             persistParametersAndReferences(standard.getId(), allResults);
 
+            success = true;
             audit.setSuccess(true);
             // retrievalChannels 字段为 String 列（JSON 数组文本），按字符串存
             audit.setRetrievalChannels("[\"schema-deriver\",\"batch-extractor\"]");
@@ -82,6 +84,7 @@ public class GbIngestionPipeline {
         } finally {
             try { auditLogRepository.save(audit); } catch (Exception ignored) {}
         }
+        return success;
     }
 
     private GbClause toClause(String standardId, GbClauseNode node, BatchExtractResult r) {

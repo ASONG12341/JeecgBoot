@@ -231,7 +231,11 @@ public class GbStandardController {
             GbDocStructure structure = structureParser.parse(markdown);
 
             // 触发入库管线（推导 domain_schema → 批量抽取槽位/参数/引用 → 持久化条款 → 审计埋点）
-            ingestionPipeline.run(gbStandard, structure);
+            // pipeline 内部异常被吞掉并以返回值表示成败；失败时此处同样回滚到 CONFIRMED
+            boolean ok = ingestionPipeline.run(gbStandard, structure);
+            if (!ok) {
+                throw new IllegalStateException("入库管线执行失败（详见 gb_audit_log）");
+            }
 
             // 成功 → COMPLETED
             updateParseStatus(doc, LLMConsts.PARSE_STATUS_COMPLETED);

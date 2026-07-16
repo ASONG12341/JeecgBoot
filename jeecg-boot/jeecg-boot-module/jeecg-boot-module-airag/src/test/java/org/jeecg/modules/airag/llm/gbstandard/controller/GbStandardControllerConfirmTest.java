@@ -98,6 +98,8 @@ class GbStandardControllerConfirmTest {
         when(airagKnowledgeDocMapper.selectById(DOC_ID)).thenReturn(doc);
         when(gbStandardMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(gbStandard);
         when(structureParser.parse(anyString())).thenReturn(structure);
+        // pipeline.run 默认返回 true（成功）；失败用例会覆盖此桩
+        when(ingestionPipeline.run(any(), any())).thenReturn(true);
         // 关键：记录每次 updateById 调用时刻的状态（doc 是原地修改，必须按调用时刻快照）
         when(airagKnowledgeDocMapper.updateById(any(AiragKnowledgeDoc.class))).thenAnswer(inv -> {
             AiragKnowledgeDoc d = inv.getArgument(0);
@@ -154,6 +156,22 @@ class GbStandardControllerConfirmTest {
         // statusSequence 不包含 COMPLETED（防御性断言，证明从未到达成功终态）
         assertFalse(statusSequence.contains(LLMConsts.PARSE_STATUS_COMPLETED),
                 "失败路径不应到达 COMPLETED");
+    }
+
+    // ==================== Pipeline-swallowed failure path ====================
+
+    @Test
+    void confirmFailureRollsBackWhenPipelineReturnsFalse() {
+        // pipeline.run 返回 false（内部异常被吞掉，仅记审计）—— 控制器仍应回滚
+        when(ingestionPipeline.run(any(), any())).thenReturn(false);
+
+        Result<String> result = controller.confirm(DOC_ID);
+
+        assertFalse(result.isSuccess(), "pipeline 返回 false 时应返回失败 Result");
+        assertEquals(LLMConsts.PARSE_STATUS_CONFIRMED, doc.getParseStatus(),
+                "pipeline 返回 false 应回滚到 CONFIRMED");
+        assertFalse(statusSequence.contains(LLMConsts.PARSE_STATUS_COMPLETED),
+                "pipeline 返回 false 不应到达 COMPLETED");
     }
 }
 //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】GbStandardController.confirm 状态机接入入库管线测试-----------
