@@ -133,17 +133,16 @@ public class ContextAssembler {
     /**
      * 格式化引用标注：[标准号 版本] §条款号 (页码)。
      * <p>
-     * GbReference 当前无 version / page 字段，这两段留空（仅保留方括号占位以保持格式约定，
-     * 待后续 GbReference 增补字段后自然填充）。
+     * F6 已为 GbReference 增补 targetVersion + targetPageNo 字段，引用格式现在完整。
      * </p>
      */
     private String formatCitation(GbReference ref) {
         String standardNo = StringUtils.hasText(ref.getTargetStandardNo()) ? ref.getTargetStandardNo() : "";
-        // 版本字段暂缺
-        String version = "";
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F6】引用格式补 version + page（GbReference 已增字段）-----------
+        String version = StringUtils.hasText(ref.getTargetVersion()) ? ref.getTargetVersion() : "";
         String clauseNo = StringUtils.hasText(ref.getTargetClausePath()) ? ref.getTargetClausePath() : "";
-        // 页码字段暂缺
-        String page = "";
+        String page = ref.getTargetPageNo() != null ? String.valueOf(ref.getTargetPageNo()) : "";
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F6】-----------
 
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(standardNo);

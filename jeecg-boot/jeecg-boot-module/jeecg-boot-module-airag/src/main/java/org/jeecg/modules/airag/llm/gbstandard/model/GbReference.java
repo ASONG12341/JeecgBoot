@@ -41,6 +41,14 @@ public class GbReference implements Serializable {
     @Schema(description = "目标标准号")
     private String targetStandardNo;
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F6】GbReference 加 targetVersion + targetPageNo（让 ContextAssembler 引用格式完整 [标准号 版本] §条款号 (页码)）-----------
+    @Schema(description = "目标标准版次/年份，如 2022；可空")
+    private String targetVersion;
+
+    @Schema(description = "目标条款页码；可空")
+    private Integer targetPageNo;
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F6】-----------
+
     @Schema(description = "目标条款路径")
     private String targetClausePath;
 
