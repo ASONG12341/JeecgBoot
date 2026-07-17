@@ -23,12 +23,30 @@ public class GbMetadata {
     public static final String KEY_AMENDMENT = "amendment";
     public static final String KEY_STATUS = "status";
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】GbMetadata 加 4 键（修复 P3 buildMetadataFilter 读但未写的降级）-----------
+    public static final String KEY_STANDARD_NO = "standard_no";
+    public static final String KEY_PRIMARY_TYPE = "primary_type";
+    public static final String KEY_SECONDARY_TYPE = "secondary_type";
+    public static final String KEY_CLAUSE_PATH = "clause_path";
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
+
     private String chapter;
     private String testType;
     private String nCellsAlias;
     private String clauseId;
     private String amendment;
     private String status;
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】4 个新键字段-----------
+    /** 标准号，如 GB 31241（regex 可抽） */
+    private String standardNo;
+    /** 槽位1-做什么（领域无关；regex 抽不出，由入库管线从 LLM 槽位注入） */
+    private String primaryType;
+    /** 槽位2-对谁（领域无关；同上） */
+    private String secondaryType;
+    /** 条款路径，如 9.2.3（regex 可抽） */
+    private String clausePath;
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
 
     /**
      * 将非空字段写入 LangChain4j Metadata。
@@ -43,6 +61,12 @@ public class GbMetadata {
         putIfNotEmpty(metadata, KEY_CLAUSE_ID, clauseId);
         putIfNotEmpty(metadata, KEY_AMENDMENT, amendment);
         putIfNotEmpty(metadata, KEY_STATUS, status);
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】写入 4 个新键（让 P3 buildMetadataFilter 精排生效）-----------
+        putIfNotEmpty(metadata, KEY_STANDARD_NO, standardNo);
+        putIfNotEmpty(metadata, KEY_PRIMARY_TYPE, primaryType);
+        putIfNotEmpty(metadata, KEY_SECONDARY_TYPE, secondaryType);
+        putIfNotEmpty(metadata, KEY_CLAUSE_PATH, clausePath);
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
     }
 
     private void putIfNotEmpty(Metadata metadata, String key, String value) {

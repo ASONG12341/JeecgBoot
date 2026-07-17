@@ -25,6 +25,13 @@ public class GbMetadataExtractor {
     private static final Pattern AMENDMENT_PATTERN = Pattern.compile("GB[\\s/]*T?[\\s/]*\\d+(?:[-—](\\d{4}))?");
     private static final Pattern N_CELLS_PATTERN = Pattern.compile("(\\d+)\\s*(?:S|串|个电芯)");
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】抽取 standardNo + clausePath（regex 可抽；primaryType/secondaryType 是 LLM 槽位概念，regex 抽不出，由入库管线注入）-----------
+    /** 标准号：GB/T 31467.3 / GB 31241-2022 等（含可选 /T 和年份） */
+    private static final Pattern STANDARD_NO_PATTERN = Pattern.compile("GB[\\s/]*T?[\\s/]*\\d+(?:\\.\\d+)?(?:[-—]\\d{4})?");
+    /** 条款路径：9 / 9.2 / 9.2.3（章/条/款，复用 CLAUSE_PATTERN 但含单数字章号） */
+    private static final Pattern CLAUSE_PATH_PATTERN = Pattern.compile("\\b(\\d+(?:\\.\\d+){0,2})\\b");
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
+
     private static final Set<String> TEST_TYPE_KEYWORDS = new HashSet<>(Arrays.asList(
             "过压充电", "过充电", "过充", "短路", "挤压", "针刺", "跌落",
             "高低温循环", "热冲击", "加热", "振动", "循环寿命", "过放"
@@ -35,6 +42,7 @@ public class GbMetadataExtractor {
             return GbMetadata.builder().status("current").build();
         }
 
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】builder 加 standardNo/clausePath-----------
         return GbMetadata.builder()
                 .chapter(extractChapter(text))
                 .clauseId(extractClauseId(text))
@@ -42,8 +50,23 @@ public class GbMetadataExtractor {
                 .status(extractStatus(text))
                 .testType(extractTestType(text))
                 .nCellsAlias(extractNCellsAlias(text))
+                .standardNo(extractStandardNo(text))
+                .clausePath(extractClausePath(text))
                 .build();
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
     }
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】standardNo + clausePath 抽取方法-----------
+    String extractStandardNo(String text) {
+        Matcher m = STANDARD_NO_PATTERN.matcher(text);
+        return m.find() ? m.group().replaceAll("\\s+", "") : null;
+    }
+
+    String extractClausePath(String text) {
+        Matcher m = CLAUSE_PATH_PATTERN.matcher(text);
+        return m.find() ? m.group(1) : null;
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4 I2】-----------
 
     String extractChapter(String text) {
         Matcher m = CHAPTER_PATTERN.matcher(text);
