@@ -23,5 +23,12 @@ class GbStandardPropertiesTest {
         assertThat(extractor.getModelName()).isEqualTo("qwen-flash");
         assertThat(extractor.getTimeoutSeconds()).isEqualTo(30);
     }
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】tool 子配置测试-----------
+    @Test
+    void toolShouldHaveCalcEnabledDefaultFalse() {
+        assertThat(new GbStandardProperties.Tool().isCalcEnabled()).isFalse();
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】tool 子配置测试-----------
 }
 //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】GbStandardProperties 配置子节测试-----------

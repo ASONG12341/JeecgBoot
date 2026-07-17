@@ -77,5 +77,15 @@ public class GbStandardProperties {
     private SchemaDeriver schemaDeriver = new SchemaDeriver();
     private ClauseMetadataExtractor clauseMetadataExtractor = new ClauseMetadataExtractor();
     //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】schema-deriver + clause-metadata-extractor 配置子节-----------
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】tool 子配置（calc-enabled Kill Switch）-----------
+    @Data
+    public static class Tool {
+        /** 是否启用 GbCalculationTool（默认 false，需显式开启） */
+        private boolean calcEnabled = false;
+    }
+
+    private Tool tool = new Tool();
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】tool 子配置-----------
 }
 //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 配置属性类 + Kill Switch-----------
