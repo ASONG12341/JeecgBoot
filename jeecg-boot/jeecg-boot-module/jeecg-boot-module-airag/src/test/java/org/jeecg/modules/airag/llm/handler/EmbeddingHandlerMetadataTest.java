@@ -97,10 +97,9 @@ class EmbeddingHandlerMetadataTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // 关闭所有 Kill Switch：HYBRID / QueryExpansion / MetadataLlmFallback
+        // 关闭所有 Kill Switch：HYBRID / QueryExpansion
         when(knowConfigBean.isHybridSearch()).thenReturn(false);
         when(knowConfigBean.isQueryExpansionEnabled()).thenReturn(false);
-        when(knowConfigBean.isMetadataLlmFallbackEnabled()).thenReturn(false);
         when(knowConfigBean.getRrfK()).thenReturn(60);
 
         when(embedStoreConfigBean.getHost()).thenReturn(CACHE_KEY_HOST);

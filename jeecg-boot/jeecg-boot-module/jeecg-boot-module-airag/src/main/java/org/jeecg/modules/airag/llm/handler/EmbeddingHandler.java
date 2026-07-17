@@ -641,7 +641,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      * 向量查询（4参，保留向后兼容：内部委托 5 参重载，intent=null）
      */
     public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity) {
-        return searchEmbedding(knowId, queryText, topNumber, similarity, (QueryIntent) null);
+        return searchEmbedding(knowId, queryText, topNumber, similarity, null);
     }
 
     /**
@@ -795,7 +795,7 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      */
     @Override
     public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity) {
-        return getQueryRouter(knowIds, topNumber, similarity, (QueryIntent) null);
+        return getQueryRouter(knowIds, topNumber, similarity, null);
     }
 
     //update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------

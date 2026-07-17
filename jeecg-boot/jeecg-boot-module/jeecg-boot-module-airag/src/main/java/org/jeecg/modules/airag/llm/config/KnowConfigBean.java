@@ -55,11 +55,8 @@ public class KnowConfigBean {
      */
     private boolean queryExpansionEnabled = false;
 
-    /**
-     * 是否启用 metadata 提取 LLM fallback
-     */
-    private boolean metadataLlmFallbackEnabled = false;
-    //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1】HYBRID 搜索与 metadata 提取 Kill Switch-----------
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项清理 F10】删除死配置 metadataLlmFallbackEnabled（P3 Task9 删除 GbMetadataExtractor 的 LLM-fallback 分支后，无任何生产代码读取）-----------
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项清理 F10】-----------
 
     /**
      * MinerU 配置

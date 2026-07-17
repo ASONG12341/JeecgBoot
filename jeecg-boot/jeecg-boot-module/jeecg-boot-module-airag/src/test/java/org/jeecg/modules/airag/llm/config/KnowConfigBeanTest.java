@@ -12,6 +12,5 @@ class KnowConfigBeanTest {
         assertThat(bean.getTextSearchConfig()).isEqualTo("simple");
         assertThat(bean.getRrfK()).isEqualTo(60);
         assertThat(bean.isQueryExpansionEnabled()).isFalse();
-        assertThat(bean.isMetadataLlmFallbackEnabled()).isFalse();
     }
 }

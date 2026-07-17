@@ -97,10 +97,9 @@ class EmbeddingHandlerSearchFilterTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // 默认 Kill Switch 状态：HYBRID / QueryExpansion / MetadataLlmFallback 全关
+        // 默认 Kill Switch 状态：HYBRID / QueryExpansion 全关
         when(knowConfigBean.isHybridSearch()).thenReturn(false);
         when(knowConfigBean.isQueryExpansionEnabled()).thenReturn(false);
-        when(knowConfigBean.isMetadataLlmFallbackEnabled()).thenReturn(false);
         when(knowConfigBean.getRrfK()).thenReturn(60);
 
         // 让 getEmbedStore() 算出的 cache key 与我们塞进缓存的 key 保持一致

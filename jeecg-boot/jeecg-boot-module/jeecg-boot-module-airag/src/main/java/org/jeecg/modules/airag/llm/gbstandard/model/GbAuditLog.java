@@ -32,8 +32,8 @@ public class GbAuditLog implements Serializable {
     @Schema(description = "用户查询")
     private String userQuery;
 
-    @Schema(description = "抽取的意图 (JSON)")
-    private String extractedIntent;
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项清理 F8】删除孤儿字段 extractedIntent（无 DDL 列、无外部读写，已被 routingIntent 取代）-----------
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项清理 F8】-----------
 
     //update-begin---author:song ---date:2026-07-15 for：【GB-RAG v4 P1】GbAuditLog 字段对齐 DDL ---
     @Schema(description = "路由意图 (CLAUSE_LOOKUP / PARAM_QUERY / SEMANTIC_SEARCH)")
