@@ -236,5 +236,26 @@ public class GbParameterRepositoryImpl implements GbParameterRepository {
             .distinct()
             .collect(Collectors.toList());
     }
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】saveBatch 实现（先删后插，全量替换）-----------
+    @Override
+    public int saveBatch(String standardId, List<GbParameter> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return 0;
+        }
+        // 先清理该标准下的旧参数（全量替换语义，保证幂等可重入）
+        parameterMapper.deleteByStandardId(standardId);
+        int count = 0;
+        for (GbParameter p : parameters) {
+            if (p.getStandardId() == null) {
+                p.setStandardId(standardId);
+            }
+            parameterMapper.insert(p);
+            count++;
+        }
+        log.info("[GbParameterRepository] saveBatch 完成, standardId={}, 条数={}", standardId, count);
+        return count;
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
 }
 //update-end---author:ThinkPad ---date:2026-07-14  for：【GB知识引擎】Phase 2 L5层数据访问 - GbParameterRepository实现-----------

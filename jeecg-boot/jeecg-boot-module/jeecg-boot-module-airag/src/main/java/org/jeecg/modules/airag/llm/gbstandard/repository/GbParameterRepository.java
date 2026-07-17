@@ -131,5 +131,17 @@ public interface GbParameterRepository {
      * @return 参数值列表
      */
     List<BigDecimal> getDistinctValues(String standardId, String paramName);
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】GbParameterRepository 加 saveBatch（全量替换写入，连通 gb_parameter 数据源）-----------
+    /**
+     * 批量保存参数（先删该 standardId 下旧数据，再全量插入）。
+     * 让 GbCalculationTool / ParamChannel 有数据可查。
+     *
+     * @param standardId 标准 ID
+     * @param parameters 参数列表
+     * @return 插入条数
+     */
+    int saveBatch(String standardId, List<GbParameter> parameters);
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
 }
 //update-end---author:ThinkPad ---date:2026-07-14  for：【GB知识引擎】Phase 2 L5层数据访问 - GbParameterRepository接口-----------
