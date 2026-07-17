@@ -125,5 +125,16 @@ public interface GbReferenceRepository {
      * @return 标准ID列表（按被引用次数降序）
      */
     List<String> findMostReferenced(int limit);
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】GbReferenceRepository 加 saveBatch（连通 gb_reference 数据源，让 ContextAssembler 有数据可查）-----------
+    /**
+     * 批量保存引用关系（先删该 standardId 作为 source 的旧数据，再全量插入）。
+     *
+     * @param standardId 引用方标准 ID（source standard）
+     * @param references 引用关系列表
+     * @return 插入条数
+     */
+    int saveBatch(String standardId, List<GbReference> references);
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
 }
 //update-end---author:ThinkPad ---date:2026-07-14  for：【GB知识引擎】Phase 2 L5层数据访问 - GbReferenceRepository接口-----------

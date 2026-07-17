@@ -237,5 +237,26 @@ public class GbReferenceRepositoryImpl implements GbReferenceRepository {
             .map(Map.Entry::getKey)
             .collect(Collectors.toList());
     }
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】saveBatch 实现（先删后插，全量替换；删除键 source_standard_id）-----------
+    @Override
+    public int saveBatch(String standardId, List<GbReference> references) {
+        if (references == null || references.isEmpty()) {
+            return 0;
+        }
+        // 先清理该标准作为引用方的旧引用（全量替换语义）
+        referenceMapper.deleteByStandardId(standardId);
+        int count = 0;
+        for (GbReference r : references) {
+            if (r.getSourceStandardId() == null) {
+                r.setSourceStandardId(standardId);
+            }
+            referenceMapper.insert(r);
+            count++;
+        }
+        log.info("[GbReferenceRepository] saveBatch 完成, standardId={}, 条数={}", standardId, count);
+        return count;
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
 }
 //update-end---author:ThinkPad ---date:2026-07-14  for：【GB知识引擎】Phase 2 L5层数据访问 - GbReferenceRepository实现-----------
