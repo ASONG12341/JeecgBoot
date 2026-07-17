@@ -33,6 +33,11 @@ public class VectorChannel implements RetrievalChannel {
     @Autowired
     private EmbeddingHandler embeddingHandler;
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】VectorChannel 注入 GbStandardResolver，设 standardId 让 ContextAssembler 引用增强能工作-----------
+    @Autowired
+    private org.jeecg.modules.airag.llm.gbstandard.service.GbStandardResolver gbStandardResolver;
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
+
     @Override
     public String getChannelName() {
         return "VECTOR";
@@ -120,7 +125,13 @@ public class VectorChannel implements RetrievalChannel {
         result.setClauseId((String) searchResult.get("clauseId"));
         result.setClausePath((String) searchResult.get("clausePath"));
         // primaryType 写入 metadata，供下游使用（RetrievalResult 无 primaryType 字段）
-        // standardId / standardName / title / clauseType / requirementStrength 在 embedding map 中不存在，保持 null
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】VectorChannel 设 standardId（从 standardNo 解析），让 ContextAssembler 引用增强能工作（之前 standardId 恒 null 导致 enhanceOne bail-out）-----------
+        String stdNo = (String) searchResult.get("standardNo");
+        if (stdNo != null && !stdNo.isEmpty() && gbStandardResolver != null) {
+            gbStandardResolver.resolveStandardId(stdNo).ifPresent(result::setStandardId);
+        }
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
+        // standardName / title / clauseType / requirementStrength 在 embedding map 中不存在，保持 null
 
         // 构建元数据：保留 docName / chunk / createTime / primaryType 等辅助信息
         Map<String, Object> metadata = new HashMap<>();
