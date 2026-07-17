@@ -11,7 +11,6 @@ import org.jeecg.modules.airag.llm.gbstandard.query.RoutingIntent;
 import org.jeecg.modules.airag.llm.gbstandard.query.RoutingIntentClassifier;
 import org.jeecg.modules.airag.llm.gbstandard.retrieval.dto.RetrievalRequest;
 import org.jeecg.modules.airag.llm.gbstandard.retrieval.dto.RetrievalResponse;
-import org.jeecg.modules.airag.llm.gbstandard.retrieval.intent.AdaptiveIntentExtractor;
 import org.jeecg.modules.airag.llm.gbstandard.retrieval.orchestrator.GbRetrievalOrchestrator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -33,9 +32,6 @@ public class GbRetrievalController {
 
     @Autowired
     private GbRetrievalOrchestrator retrievalOrchestrator;
-
-    @Autowired
-    private AdaptiveIntentExtractor intentExtractor;
 
     //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】/query 注入两层意图：规则路由（激活通道）+ LLM 槽位（精排过滤）-----------
     @Autowired
@@ -110,7 +106,7 @@ public class GbRetrievalController {
     /**
      * 意图提取接口
      * <p>
-     * 用于测试和调试意图提取功能
+     * 用于测试和调试意图提取功能。返回规则路由意图（RoutingIntent name）。
      * </p>
      *
      * @param query 用户查询
@@ -120,11 +116,11 @@ public class GbRetrievalController {
     @GetMapping("/extract-intent")
     public Result<String> extractIntent(
             @Parameter(description = "用户查询") @RequestParam String query) {
-        
+
         log.info("[GbRetrievalController] 提取意图: query={}", query);
 
         try {
-            String intent = intentExtractor.extractIntent(query);
+            String intent = routingIntentClassifier.classify(query).name();
             log.info("[GbRetrievalController] 提取结果: intent={}", intent);
             return Result.OK(intent);
 

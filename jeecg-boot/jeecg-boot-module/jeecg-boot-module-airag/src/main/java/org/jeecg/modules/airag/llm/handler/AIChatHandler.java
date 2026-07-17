@@ -20,7 +20,6 @@ import org.jeecg.config.AiRagConfigBean;
 import org.jeecg.modules.airag.common.consts.AiragConsts;
 import org.jeecg.modules.airag.common.handler.AIChatParams;
 import org.jeecg.modules.airag.common.handler.IAIChatHandler;
-import org.jeecg.modules.airag.common.handler.IGbIntentExtractor;
 import org.jeecg.modules.airag.common.handler.McpToolProviderWrapper;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
 //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 切换 QueryIntent（废弃 IntentContext ThreadLocal）-----------
@@ -75,14 +74,8 @@ public class AIChatHandler implements IAIChatHandler {
     @Autowired
     private AiChatConfig aiChatConfig;
 
-    // update-begin---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】AIChatHandler 注入 IGbIntentExtractor（v3.1 §4.3.4 要求在 mergeParams 同步抽取 intent）-----------
-    @Autowired
-    private IGbIntentExtractor gbIntentExtractor;
-    // update-end---author:song-claude ---date:2026-07-11  for：【v3.1 P1.2】AIChatHandler 注入 IGbIntentExtractor（v3.1 §4.3.4 要求在 mergeParams 同步抽取 intent）-----------
-    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 注入领域无关 QueryIntentExtractor（extractIntent 改用它；gbIntentExtractor 暂留待 Task 9 删除旧类）-----------
     @Autowired
     private QueryIntentExtractor queryIntentExtractor;
-    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】AIChatHandler 注入领域无关 QueryIntentExtractor（extractIntent 改用它；gbIntentExtractor 暂留待 Task 9 删除旧类）-----------
 
     /**
      * 问答

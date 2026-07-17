@@ -16,12 +16,6 @@ class GbMetadataExtractorTest {
     @InjectMocks
     private GbMetadataExtractor extractor;
 
-    @Mock
-    private org.jeecg.modules.airag.llm.config.KnowConfigBean knowConfigBean;
-
-    @Mock
-    private org.jeecg.modules.airag.common.handler.IGbIntentExtractor gbIntentExtractor;
-
     @Test
     void shouldExtractChapterAndTestTypeFromGbText() {
         String text = "第9章 过压充电测试要求，依据GB 31241-2022";

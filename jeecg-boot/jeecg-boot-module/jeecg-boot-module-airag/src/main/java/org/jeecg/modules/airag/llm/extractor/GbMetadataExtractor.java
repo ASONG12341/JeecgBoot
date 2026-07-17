@@ -1,12 +1,7 @@
 package org.jeecg.modules.airag.llm.extractor;
 
 import lombok.extern.slf4j.Slf4j;
-import org.jeecg.common.util.oConvertUtils;
-import org.jeecg.modules.airag.common.handler.GbQueryIntent;
-import org.jeecg.modules.airag.common.handler.IGbIntentExtractor;
-import org.jeecg.modules.airag.llm.config.KnowConfigBean;
 import org.jeecg.modules.airag.llm.vo.GbMetadata;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
@@ -15,10 +10,11 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-//update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 4】GB 标准 metadata 提取器（正则/启发式优先 + 可选 LLM fallback）-----------
+//update-begin---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 4】GB 标准 metadata 提取器（正则/启发式优先）-----------
+//update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P3 Task 9】删除旧意图系统：移除 IGbIntentExtractor LLM-fallback 分支（旧 GbQueryIntent 已废弃），仅保留正则/启发式路径-----------
 /**
  * GB 标准 metadata 提取器。
- * 策略：正则/启发式优先；关键字段缺失且开启 LLM fallback 时，调用 IGbIntentExtractor 补全。
+ * 策略：仅正则/启发式（GB-RAG v4 P3：原 LLM-fallback 分支依赖已删除的 IGbIntentExtractor/GbQueryIntent，已移除）。
  */
 @Slf4j
 @Component
@@ -34,18 +30,12 @@ public class GbMetadataExtractor {
             "高低温循环", "热冲击", "加热", "振动", "循环寿命", "过放"
     ));
 
-    @Autowired
-    private KnowConfigBean knowConfigBean;
-
-    @Autowired(required = false)
-    private IGbIntentExtractor gbIntentExtractor;
-
     public GbMetadata extractFromText(String text) {
         if (text == null || text.isEmpty()) {
             return GbMetadata.builder().status("current").build();
         }
 
-        GbMetadata meta = GbMetadata.builder()
+        return GbMetadata.builder()
                 .chapter(extractChapter(text))
                 .clauseId(extractClauseId(text))
                 .amendment(extractAmendment(text))
@@ -53,44 +43,6 @@ public class GbMetadataExtractor {
                 .testType(extractTestType(text))
                 .nCellsAlias(extractNCellsAlias(text))
                 .build();
-
-        if (knowConfigBean.isMetadataLlmFallbackEnabled() && needsLlmFallback(meta) && text.length() <= 2000) {
-            try {
-                GbQueryIntent intent = gbIntentExtractor.extractWithFallback(text, null);
-                if (intent != null) {
-                    fillFromIntent(meta, intent);
-                }
-            } catch (Exception e) {
-                log.warn("[GB-RAG] metadata LLM fallback 失败: {}", e.getMessage());
-            }
-        }
-
-        return meta;
-    }
-
-    private boolean needsLlmFallback(GbMetadata meta) {
-        return oConvertUtils.isEmpty(meta.getChapter()) || oConvertUtils.isEmpty(meta.getTestType());
-    }
-
-    private void fillFromIntent(GbMetadata meta, GbQueryIntent intent) {
-        if (oConvertUtils.isEmpty(meta.getChapter()) && oConvertUtils.isNotEmpty(intent.getInferredChapter())) {
-            meta.setChapter(intent.getInferredChapter());
-        }
-        if (oConvertUtils.isEmpty(meta.getTestType()) && oConvertUtils.isNotEmpty(intent.getTestType())) {
-            meta.setTestType(intent.getTestType());
-        }
-        if (oConvertUtils.isEmpty(meta.getNCellsAlias()) && intent.getNCells() != null) {
-            meta.setNCellsAlias(String.valueOf(intent.getNCells()));
-        }
-        if (oConvertUtils.isEmpty(meta.getClauseId()) && oConvertUtils.isNotEmpty(intent.getClauseId())) {
-            meta.setClauseId(intent.getClauseId());
-        }
-        if (oConvertUtils.isEmpty(meta.getAmendment()) && oConvertUtils.isNotEmpty(intent.getAmendment())) {
-            meta.setAmendment(intent.getAmendment());
-        }
-        if (oConvertUtils.isEmpty(meta.getStatus()) && oConvertUtils.isNotEmpty(intent.getStatus())) {
-            meta.setStatus(intent.getStatus());
-        }
     }
 
     String extractChapter(String text) {
@@ -132,4 +84,5 @@ public class GbMetadataExtractor {
         return m.find() ? m.group(1) : null;
     }
 }
-//update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 4】GB 标准 metadata 提取器（正则/启发式优先 + 可选 LLM fallback）-----------
+//update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P3 Task 9】删除旧意图系统：移除 IGbIntentExtractor LLM-fallback 分支-----------
+//update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 4】GB 标准 metadata 提取器（正则/启发式优先）-----------

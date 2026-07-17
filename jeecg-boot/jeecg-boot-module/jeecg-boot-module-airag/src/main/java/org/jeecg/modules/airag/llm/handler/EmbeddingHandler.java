@@ -44,7 +44,6 @@ import java.nio.file.Paths;
 import org.jeecg.config.AiChatConfig;
 import org.jeecg.common.system.util.JwtUtil;
 import org.jeecg.common.util.*;
-import org.jeecg.modules.airag.common.handler.GbQueryIntent;
 import org.jeecg.modules.airag.common.handler.IEmbeddingHandler;
 import org.jeecg.modules.airag.common.vo.knowledge.KnowledgeSearchResult;
 import org.jeecg.modules.airag.llm.config.EmbedStoreConfigBean;
@@ -784,23 +783,6 @@ public class EmbeddingHandler implements IEmbeddingHandler {
     //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 5 参 intent 改 QueryIntent + 输出 map 补 GB 键-----------
     //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】searchEmbedding 新增 GbQueryIntent 重载-------
 
-    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 桥接重载（保留 GbQueryIntent 入参，内部转换后委托 QueryIntent 版）-----------
-    /**
-     * 向后兼容桥接重载：接收旧 GbQueryIntent（AIChatHandler.mergeParams:398 经 IntentContext.get() 取出），
-     * 内部转换为领域无关的 QueryIntent 后委托 5 参 QueryIntent 版本。
-     * <p>
-     * 设计动机：Task 4 仅修改 EmbeddingHandler 一处文件。AIChatHandler + IntentContext 仍使用 GbQueryIntent
-     * （由 IGbIntentExtractor 抽取）。直接改 EmbeddingHandler.getQueryRouter 签名会让 AIChatHandler 编译失败，
-     * 此桥接方法用最小 blast radius 完成 QueryIntent 切换。后续 Task 完整迁移 IntentContext 后可删除。
-     * <p>
-     * 映射：clauseId→clauseId / amendment→version / testType→primaryType / inferredChapter→secondaryType（章节号降级到槽位2）。
-     * 其余旧字段（nCells/status/objectType）暂不映射到 QueryIntent 槽位（domain_schema 重新表达）。
-     */
-    public List<Map<String, Object>> searchEmbedding(String knowId, String queryText, Integer topNumber, Double similarity, GbQueryIntent legacyIntent) {
-        return searchEmbedding(knowId, queryText, topNumber, similarity, toQueryIntent(legacyIntent));
-    }
-    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】searchEmbedding 桥接重载-----------
-
     /**
      * 获取向量查询路由
      *
@@ -909,50 +891,6 @@ public class EmbeddingHandler implements IEmbeddingHandler {
         }
     }
     //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 9】getQueryRouter 新增 GbQueryIntent 重载-------
-
-    /**
-     * 向后兼容桥接重载：接收旧 GbQueryIntent（AIChatHandler.mergeParams:398 经 IntentContext.get() 取出），
-     * 内部转换为领域无关的 QueryIntent 后委托 4 参 QueryIntent 版本。动机与 searchEmbedding 桥接重载相同（最小 blast radius）。
-     */
-    public QueryRouter getQueryRouter(List<String> knowIds, Integer topNumber, Double similarity, GbQueryIntent legacyIntent) {
-        return getQueryRouter(knowIds, topNumber, similarity, toQueryIntent(legacyIntent));
-    }
-    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】getQueryRouter 4 参 intent 改 QueryIntent + 保留 GbQueryIntent 桥接重载-----------
-
-    //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】GbQueryIntent → QueryIntent 桥接转换器（供 searchEmbedding / getQueryRouter 的 GbQueryIntent 重载复用）-----------
-    /**
-     * GbQueryIntent → QueryIntent 适配器。
-     * <p>
-     * 字段映射（覆盖通用骨架可对应项）：
-     * <ul>
-     *   <li>clauseId → clauseId（直接保留）</li>
-     *   <li>amendment → version（版次语义对齐）</li>
-     *   <li>testType → primaryType（测试类型降级为槽位1-做什么）</li>
-     *   <li>inferredChapter → secondaryType（章节号降级为槽位2-对谁，仅供过滤，语义不完美但保持召回）</li>
-     * </ul>
-     * 未映射字段：nCells/status/objectType（领域专属，QueryIntent 4 槽位表达不了，由后续 domain_schema 重新表达）。
-     * 输入 null 返回 null（调用方 buildMetadataFilter 自带 null 防护）。
-     */
-    private QueryIntent toQueryIntent(GbQueryIntent legacy) {
-        if (legacy == null) {
-            return null;
-        }
-        QueryIntent.QueryIntentBuilder b = QueryIntent.builder();
-        if (oConvertUtils.isNotEmpty(legacy.getClauseId())) {
-            b.clauseId(legacy.getClauseId());
-        }
-        if (oConvertUtils.isNotEmpty(legacy.getAmendment())) {
-            b.version(legacy.getAmendment());
-        }
-        if (oConvertUtils.isNotEmpty(legacy.getTestType())) {
-            b.primaryType(legacy.getTestType());
-        }
-        if (oConvertUtils.isNotEmpty(legacy.getInferredChapter())) {
-            b.secondaryType(legacy.getInferredChapter());
-        }
-        return b.build();
-    }
-    //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】GbQueryIntent → QueryIntent 桥接转换器-----------
 
     /**
      * 删除向量化文档
