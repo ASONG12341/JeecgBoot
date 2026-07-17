@@ -7,7 +7,9 @@ import org.jeecg.modules.airag.llm.gbstandard.ingestion.dto.BatchExtractResult;
 import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
 import org.jeecg.modules.airag.llm.gbstandard.model.*;
 import org.jeecg.modules.airag.llm.gbstandard.repository.*;
+import org.jeecg.modules.airag.llm.gbstandard.service.GbStandardResolver;
 import org.jeecg.modules.airag.llm.gbstandard.vo.DomainSchema;
+import org.jeecg.modules.airag.llm.handler.EmbeddingHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -41,6 +43,10 @@ public class GbIngestionPipeline {
     @Autowired private GbStandardMapper gbStandardMapper;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig;
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING：注入 EmbeddingHandler（向量化断路）+ GbStandardResolver（跨标准引用目标解析）-----------
+    @Autowired private EmbeddingHandler embeddingHandler;
+    @Autowired private GbStandardResolver gbStandardResolver;
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING-----------
 
     public boolean run(GbStandard standard, GbDocStructure structure) {
         GbAuditLog audit = new GbAuditLog();
@@ -71,8 +77,13 @@ public class GbIngestionPipeline {
             }
             clauseRepository.saveBatch(standard.getId(), clauses);
 
+            //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING：saveBatch 后把 4 槽位写入向量库（连通 LLM→airag_embedding，让 buildMetadataFilter 有数据）-----------
+            // saveBatch 内 ASSIGN_ID 在 insert 前已写入 entity，故此处每个 GbClause 已携带 id；embedClauses 据此向量化并携带 metadata。
+            embeddingHandler.embedClauses(standard.getKnowledgeId(), standard.getStandardNo(), clauses);
+            //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】-----------
+
             // 4. 参数 + 引用（实施时从 results 收集，存 gb_parameter/gb_reference）
-            persistParametersAndReferences(standard.getId(), allResults);
+            persistParametersAndReferences(standard.getId(), allResults, clauses);
 
             success = true;
             audit.setSuccess(true);
@@ -129,20 +140,86 @@ public class GbIngestionPipeline {
         return standard.getMarkdownContent() != null ? standard.getMarkdownContent() : "";
     }
 
-    private void persistParametersAndReferences(String standardId, List<BatchExtractResult> results) {
-        // P2 占位：参数/引用全量持久化延迟。
-        // 原因：GbParameter 需 clauseId，而 clauseId 由 saveBatch 插入时生成，
-        // 需先按 clausePath 回查已存条款拿 clauseId 再转换。此处仅记计数日志。
-        int paramCount = 0;
-        int refCount = 0;
-        if (results != null) {
-            for (BatchExtractResult r : results) {
-                if (r.getParameters() != null) paramCount += r.getParameters().size();
-                if (r.getReferences() != null) refCount += r.getReferences().size();
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING：persistParametersAndReferences 真实实现（替换 P2 占位），连通 LLM→gb_parameter/gb_reference-----------
+    /**
+     * 把 BatchExtractResult 里的参数/引用映射到 GbParameter/GbReference 并全量持久化（delete-then-insert）。
+     * <p>
+     * 设计要点：
+     * <ul>
+     *   <li>clauseId 通过 clausePath→id 映射回填（saveBatch 内 ASSIGN_ID 已在 insert 前写入 entity）。</li>
+     *   <li>跨标准引用（targetType=inter）的 targetStandardId 由 GbStandardResolver 解析；intra 时为 null。</li>
+     *   <li>两条 saveBatch 各自 try/catch：param/ref 持久化失败只记日志，绝不能打断主入库流程。</li>
+     * </ul>
+     */
+    private void persistParametersAndReferences(String standardId, List<BatchExtractResult> results, List<GbClause> clauses) {
+        // 1. 构建 clausePath → clauseId 映射（用于回填 GbParameter.clauseId）
+        Map<String, String> clausePathToId = new HashMap<>();
+        if (clauses != null) {
+            for (GbClause c : clauses) {
+                if (c.getClausePath() != null && c.getId() != null) {
+                    clausePathToId.put(c.getClausePath(), c.getId());
+                }
             }
         }
-        log.info("[GbIngestionPipeline] 参数/引用持久化 standardId={}（P2 占位：param={}, ref={}，全量持久化延后）",
-                standardId, paramCount, refCount);
+
+        // 2. 收集 GbParameter + GbReference
+        List<GbParameter> paramList = new ArrayList<>();
+        List<GbReference> refList = new ArrayList<>();
+        if (results != null) {
+            for (BatchExtractResult r : results) {
+                if (r == null) continue;
+                String clauseId = r.getClausePath() != null ? clausePathToId.get(r.getClausePath()) : null;
+                // 参数映射
+                if (r.getParameters() != null) {
+                    for (BatchExtractResult.ParamExtract p : r.getParameters()) {
+                        if (p == null) continue;
+                        GbParameter gp = new GbParameter();
+                        gp.setStandardId(standardId);
+                        gp.setClauseId(clauseId); // path 未命中时为 null（按需求保留，不跳过）
+                        gp.setParamName(p.getParamName());
+                        gp.setFormula(p.getFormula());
+                        gp.setParamValue(p.getParamValue());
+                        gp.setUnit(p.getUnit());
+                        paramList.add(gp);
+                    }
+                }
+                // 引用映射
+                if (r.getReferences() != null) {
+                    for (BatchExtractResult.RefExtract ref : r.getReferences()) {
+                        if (ref == null) continue;
+                        GbReference gr = new GbReference();
+                        gr.setSourceStandardId(standardId);
+                        gr.setSourceClausePath(r.getClausePath());
+                        gr.setTargetType(ref.getTargetType());
+                        gr.setTargetStandardNo(ref.getTargetStandardNo());
+                        gr.setTargetClausePath(ref.getTargetClausePath());
+                        gr.setRefType(ref.getRefType());
+                        // 跨标准引用：解析 standardNo→standardId；intra 或无 standardNo 时为 null
+                        gr.setTargetStandardId(
+                                "inter".equalsIgnoreCase(ref.getTargetType()) && ref.getTargetStandardNo() != null && !ref.getTargetStandardNo().isBlank()
+                                        ? gbStandardResolver.resolveStandardId(ref.getTargetStandardNo()).orElse(null)
+                                        : null
+                        );
+                        refList.add(gr);
+                    }
+                }
+            }
+        }
+
+        // 3. 全量持久化（各自 try/catch —— 失败不能打断主管线）
+        try {
+            parameterRepository.saveBatch(standardId, paramList);
+            log.info("[GbIngestionPipeline] 参数持久化完成 standardId={}, 参数数={}", standardId, paramList.size());
+        } catch (Exception e) {
+            log.error("[GbIngestionPipeline] 参数持久化失败 standardId={}, 参数数={}, 错误: {}", standardId, paramList.size(), e.getMessage(), e);
+        }
+        try {
+            referenceRepository.saveBatch(standardId, refList);
+            log.info("[GbIngestionPipeline] 引用持久化完成 standardId={}, 引用数={}", standardId, refList.size());
+        } catch (Exception e) {
+            log.error("[GbIngestionPipeline] 引用持久化失败 standardId={}, 引用数={}, 错误: {}", standardId, refList.size(), e.getMessage(), e);
+        }
     }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING-----------
 }
 //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】入库管线编排器（derive→extract→persist→audit）-----------
