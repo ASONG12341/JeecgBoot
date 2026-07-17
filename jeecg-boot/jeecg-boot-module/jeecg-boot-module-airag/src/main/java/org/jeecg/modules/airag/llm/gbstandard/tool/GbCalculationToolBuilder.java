@@ -43,7 +43,7 @@ public class GbCalculationToolBuilder {
                 .description("查询国标中的技术参数值并按公式计算。优先返回静态参数值；需变量代入时用安全算术计算。禁止自行估算数值。")
                 .parameters(JsonObjectSchema.builder()
                         .addStringProperty("standardNo", "标准号，如 GB 31241")
-                        .addStringProperty("paramName", "参数名，如 overcharge_threshold")
+                        .addStringProperty("paramName", "参数名（英文 snake_case 标识符，如阈值/限值类参数名）")
                         .addStringProperty("variables", "变量值 JSON，如 {\"n\":3}；无变量传空")
                         .required("standardNo", "paramName")
                         .build())
