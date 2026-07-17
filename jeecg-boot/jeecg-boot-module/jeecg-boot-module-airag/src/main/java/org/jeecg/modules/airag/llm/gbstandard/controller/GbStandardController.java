@@ -208,11 +208,16 @@ public class GbStandardController {
             return Result.error("文档不存在: " + docId);
         }
 
-        // 验证状态: 必须是 PARSED 才能确认
-        if (!LLMConsts.PARSE_STATUS_PARSED.equals(doc.getParseStatus())) {
-            return Result.error("文档状态不正确，当前: " + doc.getParseStatus()
-                    + "。需要为 " + LLMConsts.PARSE_STATUS_PARSED + "（先执行预览）");
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】放宽 confirm 守卫：允许 PARSED 或 COMPLETED 状态重新确认（调参/改 prompt 后可直接重跑入库管线）-----------
+        // 验证状态: PARSED（首次确认）或 COMPLETED（重新确认，重跑管线以应用新的抽取/嵌入逻辑）
+        String currentStatus = doc.getParseStatus();
+        if (!LLMConsts.PARSE_STATUS_PARSED.equals(currentStatus)
+                && !LLMConsts.PARSE_STATUS_COMPLETED.equals(currentStatus)) {
+            return Result.error("文档状态不正确，当前: " + currentStatus
+                    + "。需要为 " + LLMConsts.PARSE_STATUS_PARSED + "（先执行预览）或 "
+                    + LLMConsts.PARSE_STATUS_COMPLETED + "（重新确认）");
         }
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
 
         // 更新为 CONFIRMED
         updateParseStatus(doc, LLMConsts.PARSE_STATUS_CONFIRMED);

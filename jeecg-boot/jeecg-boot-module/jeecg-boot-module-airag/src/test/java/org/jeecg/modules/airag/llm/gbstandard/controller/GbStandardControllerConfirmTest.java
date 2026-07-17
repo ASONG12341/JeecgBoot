@@ -131,6 +131,21 @@ class GbStandardControllerConfirmTest {
         verify(ingestionPipeline, times(1)).run(eq(gbStandard), eq(structure));
     }
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】测试 COMPLETED 状态可重新确认（守卫放宽）-----------
+    @Test
+    void confirmShouldAllowReconfirmFromCompleted() {
+        // 文档已在 COMPLETED 状态（之前确认过），P5 后应允许重新确认重跑管线
+        doc.setParseStatus(LLMConsts.PARSE_STATUS_COMPLETED);
+
+        Result<String> result = controller.confirm(DOC_ID);
+
+        assertTrue(result.isSuccess(), "COMPLETED 状态重新确认应成功");
+        assertEquals(LLMConsts.PARSE_STATUS_COMPLETED, doc.getParseStatus(),
+                "重新确认成功后状态应回到 COMPLETED");
+        verify(ingestionPipeline, times(1)).run(eq(gbStandard), eq(structure));
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5】-----------
+
     // ==================== Failure path ====================
 
     @Test
