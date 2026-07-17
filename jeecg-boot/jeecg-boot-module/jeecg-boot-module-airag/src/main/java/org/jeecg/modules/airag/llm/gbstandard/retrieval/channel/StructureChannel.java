@@ -138,12 +138,10 @@ public class StructureChannel implements RetrievalChannel {
     private List<RetrievalResult> searchByParameter(RetrievalRequest request) {
         List<RetrievalResult> results = new ArrayList<>();
 
-        // 如果请求中指定了参数名称
+        //update-begin---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】StructureChannel 移除领域专属关键词提取（领域无关红线；参数名只走 request 显式传入，槽位驱动的参数查询由 ParamChannel 负责）-----------
+        // 仅使用请求中显式指定的参数名；不再从 query 文本做领域关键词提取（违反领域无关原则）
         String paramName = request.getParameterName();
-        if (!StringUtils.hasText(paramName)) {
-            // 从查询文本中提取参数名称
-            paramName = extractParameterName(request.getQuery());
-        }
+        //update-end---author:song ---date:2026-07-16  for：【GB-RAG v4 P3】-----------
 
         if (StringUtils.hasText(paramName)) {
             //update-begin---author:Claude Fable 5 ---date:2026-07-14  for：修复编译错误，使用 GbParameterRepository 已有的 searchByName-----------
@@ -291,29 +289,5 @@ public class StructureChannel implements RetrievalChannel {
         }
 
         return clauseNumbers;
-    }
-
-    /**
-     * 从查询文本中提取参数名称
-     */
-    private String extractParameterName(String query) {
-        if (!StringUtils.hasText(query)) {
-            return null;
-        }
-
-        // 常见参数关键词
-        String[] paramKeywords = {
-            "强度", "硬度", "韧性", "抗拉", "屈服", "延伸率", "冲击",
-            "温度", "压力", "厚度", "直径", "长度", "宽度",
-            "含量", "浓度", "密度", "重量", "载荷"
-        };
-
-        for (String keyword : paramKeywords) {
-            if (query.contains(keyword)) {
-                return keyword;
-            }
-        }
-
-        return null;
     }
 }
