@@ -55,6 +55,7 @@ import org.jeecg.modules.airag.llm.entity.AiragKnowledge;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
 import org.jeecg.modules.airag.llm.entity.AiragModel;
 import org.jeecg.modules.airag.llm.extractor.GbMetadataExtractor;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbClause;
 import org.jeecg.modules.airag.llm.gbstandard.query.QueryIntent;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeMapper;
 import org.jeecg.modules.airag.llm.mapper.AiragModelMapper;
@@ -182,6 +183,13 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      * 向量存储元数据：创建时间
      */
     public static final String EMBED_STORE_CREATE_TIME = "createTime";
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 3】embedClauses 按条款粒度向量化，metadata 带 4 槽位 + locator 键-----------
+    /**
+     * 向量存储元数据:standard_id（按条款入库时写入，用于按标准删除旧条款向量）
+     */
+    public static final String EMBED_STORE_METADATA_STANDARD_ID = "standard_id";
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 3】embedClauses 按条款粒度向量化，metadata 带 4 槽位 + locator 键-----------
 
     /**
      * 向量存储缓存
@@ -319,6 +327,104 @@ public class EmbeddingHandler implements IEmbeddingHandler {
 
         return metadata.toMap();
     }
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 3】embedClauses 按条款粒度向量化，metadata 带 4 槽位 + locator 键-----------
+    /**
+     * 按条款粒度向量化并写入向量库（GB-RAG v4 Phase 5 核心任务：连通 LLM 抽取的 4 槽位与向量库）。
+     * <p>
+     * 每个 GbClause 生成 1 个 TextSegment，其 Metadata 携带：
+     * <ul>
+     *   <li>{@code standard_id}     ← clause.getStandardId()（用于按标准删除旧向量）</li>
+     *   <li>{@code knowledgeId}     ← knowId（与既有 embeddingDocument 写入的隔离键一致，被 searchEmbedding 的 base filter 命中）</li>
+     *   <li>{@code standard_no}     ← standardNo 参数（locator，buildMetadataFilter 读）</li>
+     *   <li>{@code clause_id}       ← clause.getClausePath()（locator，buildMetadataFilter 读，对齐 intent.clauseId）</li>
+     *   <li>{@code clause_path}     ← clause.getClausePath()（冗余键，便于检索结果回填）</li>
+     *   <li>{@code primary_type}    ← clause.getPrimaryType()（槽位1，buildMetadataFilter 读，GB-RAG v4 关键修复）</li>
+     *   <li>{@code secondary_type}  ← clause.getSecondaryType()（槽位2，buildMetadataFilter 读，GB-RAG v4 关键修复）</li>
+     *   <li>{@code polarity}        ← clause.getPolarity()</li>
+     *   <li>{@code condition_text}  ← clause.getConditionText()（非空才写，槽位4）</li>
+     * </ul>
+     * 流程：解析知识库 → embedId → AiragModel → embeddingModel + embeddingStore →
+     * 按 distinct standard_id 删除旧条款向量 → 按 clause 建 TextSegment → batchEmbedAll(10) → addAll。
+     * <p>
+     * 防御性：knowId 为空 / clauses 为空 → 记日志并返回（不抛异常，不阻塞入库管线）。
+     * 整个嵌入路径包裹在 try/catch 中：失败只记日志，不抛异常（不能打断 ingestion pipeline）。
+     *
+     * @param knowId     知识库 ID（必填，非空时才进行向量化）
+     * @param standardNo 标准号（如 "GB 31241-2022"），写入 metadata.standard_no
+     * @param clauses    条款列表（每个条款产出 1 个 chunk；空则直接返回）
+     */
+    public void embedClauses(String knowId, String standardNo, List<GbClause> clauses) {
+        // 防御：空入参直接返回，不抛异常（null 与纯空白都视为空，符合 "null/blank knowId" 契约）
+        if (knowId == null || knowId.trim().isEmpty()) {
+            log.warn("[GB-RAG v4 P5] embedClauses 跳过: knowId 为空");
+            return;
+        }
+        if (clauses == null || clauses.isEmpty()) {
+            log.info("[GB-RAG v4 P5] embedClauses 跳过: clauses 为空, knowId={}, standardNo={}", knowId, standardNo);
+            return;
+        }
+
+        try {
+            // 解析知识库 → embedId → AiragModel → embeddingModel + embeddingStore
+            AiragKnowledge airagKnowledge = airagKnowledgeService.getById(knowId);
+            if (airagKnowledge == null || oConvertUtils.isEmpty(airagKnowledge.getEmbedId())) {
+                log.warn("[GB-RAG v4 P5] embedClauses 跳过: 知识库不存在或未配置向量模型, knowId={}", knowId);
+                return;
+            }
+            AiragModel model = getEmbedModelData(airagKnowledge.getEmbedId());
+            AiModelOptions modelOp = buildModelOptions(model);
+            EmbeddingModel embeddingModel = AiModelFactory.createEmbeddingModel(modelOp);
+            EmbeddingStore<TextSegment> embeddingStore = getEmbedStore(model);
+
+            // 删除该批次涉及的所有 distinct standardId 对应的旧条款向量（重入库幂等）
+            clauses.stream()
+                    .map(GbClause::getStandardId)
+                    .filter(oConvertUtils::isNotEmpty)
+                    .distinct()
+                    .forEach(sid -> {
+                        try {
+                            embeddingStore.removeAll(metadataKey(EMBED_STORE_METADATA_STANDARD_ID).isEqualTo(sid));
+                        } catch (Exception e) {
+                            log.warn("[GB-RAG v4 P5] 删除旧条款向量失败, standardId={}, 错误: {}", sid, e.getMessage());
+                        }
+                    });
+
+            // 为每个条款构建一个 TextSegment（text 为空则跳过），Metadata 携带 4 槽位 + locator
+            List<TextSegment> segments = new ArrayList<>(clauses.size());
+            for (GbClause clause : clauses) {
+                if (clause == null || oConvertUtils.isEmpty(clause.getText())) {
+                    continue;
+                }
+                Metadata md = Metadata.metadata(EMBED_STORE_METADATA_STANDARD_ID, clause.getStandardId())
+                        .put(EMBED_STORE_METADATA_KNOWLEDGEID, knowId)
+                        .put("standard_no", standardNo == null ? "" : standardNo)
+                        .put("clause_id", clause.getClausePath() == null ? "" : clause.getClausePath())
+                        .put("clause_path", clause.getClausePath() == null ? "" : clause.getClausePath())
+                        .put("primary_type", clause.getPrimaryType() == null ? "" : clause.getPrimaryType())
+                        .put("secondary_type", clause.getSecondaryType() == null ? "" : clause.getSecondaryType())
+                        .put("polarity", clause.getPolarity() == null ? "" : clause.getPolarity());
+                if (clause.getConditionText() != null) {
+                    md.put("condition_text", clause.getConditionText());
+                }
+                segments.add(TextSegment.from(clause.getText(), md));
+            }
+            if (segments.isEmpty()) {
+                log.info("[GB-RAG v4 P5] embedClauses 跳过: 过滤空文本后无可用条款, knowId={}, standardNo={}", knowId, standardNo);
+                return;
+            }
+
+            // 分批向量化（DashScope 单批 10 条上限），add 到 store
+            List<Embedding> embeddings = batchEmbedAll(embeddingModel, segments, EMBED_BATCH_SIZE);
+            embeddingStore.addAll(embeddings, segments);
+            log.info("[GB-RAG v4 P5] embedClauses 完成: knowId={}, standardNo={}, 条款数={}, 写入 chunk 数={}",
+                    knowId, standardNo, clauses.size(), segments.size());
+        } catch (Exception e) {
+            // 失败只记日志，不抛异常 —— 不能打断 ingestion pipeline
+            log.error("[GB-RAG v4 P5] embedClauses 失败: knowId={}, standardNo={}, 错误: {}", knowId, standardNo, e.getMessage(), e);
+        }
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 3】embedClauses 按条款粒度向量化，metadata 带 4 槽位 + locator 键-----------
 
     /**
      * 创建分段器
