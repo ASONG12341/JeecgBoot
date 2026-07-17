@@ -70,10 +70,13 @@ public class ParamChannel implements RetrievalChannel {
             } else if (StringUtils.hasText(standardId) && qi != null && qi.getQuantityValue() != null) {
                 // 有量值槽位但无参数名：退化为查询该标准下所有参数，交给上层按量值裁剪
                 // （gb_parameter 表无按量值匹配的现成 repo 方法，这里召回候选，避免空结果）
+                //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F5】ParamChannel 限流防过召回（大标准可能有数百参数，裁到 topK*2）-----------
                 List<GbParameter> all = parameterRepository.findByStandardId(standardId);
                 if (all != null) {
-                    parameters.addAll(all);
+                    int limit = Math.max(1, request.getTopK() * 2);
+                    parameters.addAll(all.size() > limit ? all.subList(0, limit) : all);
                 }
+                //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 延后项 F5】-----------
             } else if (StringUtils.hasText(paramName)) {
                 // 无 standardId：跨标准按参数名查（searchByName 允许 standardId 为 null）
                 List<GbParameter> byName = parameterRepository.searchByName(null, paramName);
