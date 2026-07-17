@@ -62,6 +62,15 @@ import org.jeecg.modules.airag.llm.handler.JeecgToolsProvider;
 import org.jeecg.modules.airag.llm.mapper.AiragModelMapper;
 import org.jeecg.modules.airag.llm.service.IAiragFlowPluginService;
 import org.jeecg.modules.airag.llm.service.IAiragKnowledgeService;
+//update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】AiragChatServiceImpl 接入 GB 国标（工具/合规提示/审计）-----------
+import org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties;
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbAuditLog;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbStandard;
+import org.jeecg.modules.airag.llm.gbstandard.repository.GbAuditLogRepository;
+import org.jeecg.modules.airag.llm.gbstandard.tool.GbCalculationToolBuilder;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+//update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
 import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.BoundValueOperations;
@@ -131,6 +140,20 @@ public class AiragChatServiceImpl implements IAiragChatService {
 
     @Autowired
     AiRagConfigBean aiRagConfigBean;
+
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 国标依赖注入（工具/属性/Mapper/审计）-----------
+    @Autowired
+    private GbCalculationToolBuilder gbCalculationToolBuilder;
+
+    @Autowired
+    private GbStandardProperties gbStandardProperties;
+
+    @Autowired
+    private GbStandardMapper gbStandardMapper;
+
+    @Autowired
+    private GbAuditLogRepository gbAuditLogRepository;
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
 
     /**
      * 重新接收消息
@@ -1246,6 +1269,11 @@ public class AiragChatServiceImpl implements IAiragChatService {
         if (oConvertUtils.isNotEmpty(prompt)) {
             appendMessage(messages, new SystemMessage(prompt), chatConversation, topicId);
         }
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 国标知识库时追加合规 SystemMessage（领域无关）-----------
+        if (gbStandardProperties.isEnabled() && isGbStandardKnowledge(aiApp.getKnowIds())) {
+            appendMessage(messages, new SystemMessage(buildGbCompliancePrompt()), chatConversation, topicId);
+        }
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
 
         AIChatParams aiChatParams = new AIChatParams();
         // AI应用自定义的模型参数
@@ -1414,6 +1442,112 @@ public class AiragChatServiceImpl implements IAiragChatService {
         }
     }
 
+    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 国标辅助方法（判断 GB 知识库 / 合规提示 / 审计写入）-----------
+    /**
+     * 判断当前知识库集合中是否包含 GB 国标知识库。
+     * <p>查询 gb_standard 表的 knowledgeId 字段是否命中 knowIds 中任意一项。
+     * 领域无关：不依赖任何具体国标领域词。</p>
+     *
+     * @param knowIds 知识库 ID 列表（可为空）
+     * @return true=存在 GB 国标知识库
+     */
+    private boolean isGbStandardKnowledge(List<String> knowIds) {
+        if (knowIds == null || knowIds.isEmpty()) {
+            return false;
+        }
+        try {
+            LambdaQueryWrapper<GbStandard> wrapper = new LambdaQueryWrapper<>();
+            wrapper.in(GbStandard::getKnowledgeId, knowIds);
+            Long count = gbStandardMapper.selectCount(wrapper);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.warn("[GB-RAG] isGbStandardKnowledge 查询失败，按 false 处理: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 构造 GB 合规系统提示（领域无关）。
+     * <p>不含任何具体行业（电池/钢铁等）词汇。仅描述通用合规要求：引用条款号、禁自算数值、注意否定/例外、多标准差异、版次标注。</p>
+     *
+     * @return GB 合规提示字符串
+     */
+    private String buildGbCompliancePrompt() {
+        return "你是国标合规助手。回答时必须："
+                + "1. 引用具体的标准号和条款号（上下文已标注 [标准号 版本] §条款号）；"
+                + "2. 数值计算必须使用 query_gb_parameter 工具，禁止自行估算；"
+                + "3. 注意否定/例外条款的语义反转；"
+                + "4. 多标准有不同要求时明确指出差异；"
+                + "5. 优先依据现行版标准，引用旧版需标注版次。";
+    }
+
+    /**
+     * 保存 GB 审计日志（防御式：审计失败不得中断聊天主流程）。
+     *
+     * @param sessionId     会话 ID
+     * @param userQuery     用户查询
+     * @param llmResponse   LLM 回答（可截断）
+     * @param latencyMs     端到端耗时（毫秒）
+     * @param success       是否成功
+     * @param routingIntent 路由意图（可空）
+     */
+    private void saveGbAuditLog(String sessionId, String userQuery, String llmResponse,
+                                long latencyMs, boolean success, String routingIntent) {
+        try {
+            GbAuditLog logEntry = new GbAuditLog();
+            logEntry.setSessionId(sessionId);
+            logEntry.setUserQuery(truncate(userQuery, 2000));
+            logEntry.setLlmResponse(truncate(llmResponse, 4000));
+            logEntry.setLatencyMs((int) Math.min(latencyMs, Integer.MAX_VALUE));
+            logEntry.setSuccess(success);
+            logEntry.setRoutingIntent(routingIntent);
+            gbAuditLogRepository.save(logEntry);
+        } catch (Exception e) {
+            log.warn("[GB-RAG] 审计日志写入失败（已忽略，不影响聊天）: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 字符串安全截断（null 安全；超长截断避免审计字段过长）。
+     */
+    private String truncate(String value, int maxLen) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() > maxLen ? value.substring(0, maxLen) : value;
+    }
+
+    /**
+     * 从消息列表尾部向前查找最后一条 UserMessage 的文本（用于 GB 审计）。
+     * <p>多模态/图像消息可能 singleText() 抛异常或为空，向前回溯至第一条非空文本。</p>
+     *
+     * @param messages 当前消息列表
+     * @return 最后一条用户消息文本，找不到返回 null
+     */
+    private String extractLastUserQuery(List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return null;
+        }
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ChatMessage msg = messages.get(i);
+            if (msg instanceof UserMessage) {
+                try {
+                    UserMessage um = (UserMessage) msg;
+                    if (um.hasSingleText()) {
+                        String text = um.singleText();
+                        if (oConvertUtils.isNotEmpty(text)) {
+                            return text;
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // 多模态消息可能无单文本，跳过
+                }
+            }
+        }
+        return null;
+    }
+    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
+
     /**
      * 处理聊天
      * 向大模型发送消息并接受响应
@@ -1455,6 +1589,21 @@ public class AiragChatServiceImpl implements IAiragChatService {
             }
         }
         //update-end---author:wangshuai ---date:2026-04-15  for：Brave Search配置迁移到AiRagConfigBean，仅在联网搜索开启时注入工具-----------
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 国标知识库时注入 GbCalculationTool（query_gb_parameter）-----------
+        // 注：此处 knowIds 尚未合并到 aiChatParams，使用 chatConversation.getApp().getKnowIds() 判断更稳妥。
+        if (gbStandardProperties.getTool().isCalcEnabled()
+                && isGbStandardKnowledge(chatConversation.getApp().getKnowIds())) {
+            Map<ToolSpecification, ToolExecutor> gbTools = gbCalculationToolBuilder.buildTools();
+            if (gbTools != null && !gbTools.isEmpty()) {
+                Map<ToolSpecification, ToolExecutor> existing = aiChatParams.getTools();
+                if (existing == null) {
+                    existing = new HashMap<>();
+                }
+                existing.putAll(gbTools);
+                aiChatParams.setTools(existing);
+            }
+        }
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
         if(CollectionUtils.isEmpty(aiChatParams.getKnowIds())){
             aiChatParams.setKnowIds(chatConversation.getApp().getKnowIds());
         } else {
@@ -1464,6 +1613,12 @@ public class AiragChatServiceImpl implements IAiragChatService {
         aiChatParams.setCurrentHttpRequest(httpRequest);
         // for [QQYUN-9234] MCP服务连接关闭 - 保存参数引用用于在回调中关闭MCP连接
         final AIChatParams finalAiChatParams = aiChatParams;
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 聊天审计：仅当 GB 国标知识库命中时启用，避免无谓审计行-----------
+        final boolean gbAuditEnabled = gbStandardProperties.isEnabled()
+                && isGbStandardKnowledge(aiChatParams.getKnowIds());
+        final long gbChatStartMs = System.currentTimeMillis();
+        final String gbUserQuery = extractLastUserQuery(messages);
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
         TokenStream chatStream;
         try {
             aiChatParams.setTimeout(5*30*1000);
@@ -1476,6 +1631,12 @@ public class AiragChatServiceImpl implements IAiragChatService {
             }
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+            //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】聊天调用异常时写 GB 审计失败记录-----------
+            if (gbAuditEnabled) {
+                saveGbAuditLog(chatConversation.getId(), gbUserQuery, e.getMessage(),
+                        System.currentTimeMillis() - gbChatStartMs, false, null);
+            }
+            //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
             // for [QQYUN-9234] MCP服务连接关闭 - 异常时关闭MCP连接
             finalAiChatParams.closeMcpConnections();
             // sse
@@ -1620,6 +1781,12 @@ public class AiragChatServiceImpl implements IAiragChatService {
                 saveChatConversation(chatConversation, false, httpRequest, sessionType);
                 //update-end---author:wangshuai---date:2025-12-10---for:【QQYUN-14127】【AI】AI应用门户---
                 closeSSE(emitter, eventData);
+                //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 聊天成功审计（响应完成 + STOP）-----------
+                if (gbAuditEnabled) {
+                    saveGbAuditLog(chatConversation.getId(), gbUserQuery, respText,
+                            System.currentTimeMillis() - gbChatStartMs, true, null);
+                }
+                //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
             } else if (FinishReason.LENGTH.equals(finishReason)) {
                 // 上下文长度超过限制
                 log.error("调用模型异常:上下文长度超过限制:{}", responseMessage.tokenUsage());
@@ -1628,6 +1795,12 @@ public class AiragChatServiceImpl implements IAiragChatService {
                 sendMessage2Client(emitter, eventData);
                 eventData = new EventData(requestId, null, EventData.EVENT_MESSAGE_END, chatConversation.getId(), topicId);
                 closeSSE(emitter, eventData);
+                //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 聊天失败审计（LENGTH 截断）-----------
+                if (gbAuditEnabled) {
+                    saveGbAuditLog(chatConversation.getId(), gbUserQuery, "LENGTH:" + respText,
+                            System.currentTimeMillis() - gbChatStartMs, false, null);
+                }
+                //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
             } else {
                 // 异常结束
                 log.error("调用模型异常:" + respText);
@@ -1637,11 +1810,23 @@ public class AiragChatServiceImpl implements IAiragChatService {
                 EventData eventData = new EventData(requestId, null, EventData.EVENT_FLOW_ERROR, chatConversation.getId(), topicId);
                 eventData.setData(EventFlowData.builder().success(false).message(respText).build());
                 closeSSE(emitter, eventData);
+                //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 聊天失败审计（异常 finishReason）-----------
+                if (gbAuditEnabled) {
+                    saveGbAuditLog(chatConversation.getId(), gbUserQuery, respText,
+                            System.currentTimeMillis() - gbChatStartMs, false, finishReason != null ? finishReason.name() : null);
+                }
+                //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
             }
         }).onError((Throwable error) -> {
             // 打印流程耗时日志
             printChatDuration(requestId, "LLM输出消息异常");
             AiragLocalCache.remove(AiragConsts.CACHE_TYPE_SSE_SEND_TIME, requestId);
+            //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】GB 聊天失败审计（onError 回调）-----------
+            if (gbAuditEnabled) {
+                saveGbAuditLog(chatConversation.getId(), gbUserQuery, error != null ? error.getMessage() : null,
+                        System.currentTimeMillis() - gbChatStartMs, false, null);
+            }
+            //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 P4】-----------
             // for [QQYUN-9234] MCP服务连接关闭 - 聊天异常时关闭MCP连接
             finalAiChatParams.closeMcpConnections();
             // sse
