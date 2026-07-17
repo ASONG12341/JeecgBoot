@@ -1180,6 +1180,14 @@ public class AiragChatServiceImpl implements IAiragChatService {
         // 流程结束后,记录ai返回并保存会话
         // sse
         SseEmitter emitter = AiragLocalCache.get(AiragConsts.CACHE_TYPE_SSE, requestId);
+        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】GB 聊天审计：流程路径（sendWithFlow）镜像 P4 Task 5 的审计钩子，捕获 GB 启用标志/起始时间/用户查询-----------
+        // 注：流程路径 app 可能为空（见上方 1149/1153 的非空判断），此处对 knowIds 做空安全处理。
+        // 注：捕获变量必须在 setEventCallback 之前定义，以便 lambda 内引用（Java 作用域要求）。
+        List<String> gbKnowIds = chatConversation.getApp() != null ? chatConversation.getApp().getKnowIds() : null;
+        final boolean gbAuditEnabled = gbStandardProperties.isEnabled() && isGbStandardKnowledge(gbKnowIds);
+        final long gbChatStartMs = System.currentTimeMillis();
+        final String gbUserQuery = extractLastUserQuery(messages);
+        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】-----------
         flowRunParams.setEventCallback(eventData -> {
             if (EventData.EVENT_FLOW_FINISHED.equals(eventData.getEvent())) {
                 // 打印耗时日志
@@ -1209,8 +1217,20 @@ public class AiragChatServiceImpl implements IAiragChatService {
                         //update-begin---author:wangshuai---date:2025-12-10---for:【QQYUN-14127】【AI】AI应用门户---
                         saveChatConversation(chatConversation, false, httpRequest, sendParams.getSessionType());
                         //update-end---author:wangshuai---date:2025-12-10---for:【QQYUN-14127】【AI】AI应用门户---
+                        //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】GB 流程路径成功审计（流程正常结束且有 outputs）-----------
+                        if (gbAuditEnabled) {
+                            saveGbAuditLog(chatConversation.getId(), gbUserQuery, aiMessage.text(),
+                                    System.currentTimeMillis() - gbChatStartMs, true, null);
+                        }
+                        //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】-----------
                     }
                 }else{
+                    //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】GB 流程路径失败审计（流程 isSuccess=false，含超时及其他异常）-----------
+                    if (gbAuditEnabled) {
+                        saveGbAuditLog(chatConversation.getId(), gbUserQuery, data.getMessage(),
+                                System.currentTimeMillis() - gbChatStartMs, false, null);
+                    }
+                    //update-end---author:song ---date:2026-07-17  for：【GB-RAG v4 F1】-----------
                     //update-begin---author:chenrui ---date:20250425  for：[QQYUN-12203]AI 聊天，超时或者服务器报错，给个友好提示------------
                     // 失败
                     String message = data.getMessage();
