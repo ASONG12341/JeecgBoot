@@ -56,9 +56,6 @@
     </div>
 
     <div class="actions">
-      <a-button type="primary" @click="handleViewInDocument">
-        <EyeOutlined /> 在文档中查看
-      </a-button>
       <a-button @click="handleCopyContent">
         <CopyOutlined /> 复制内容
       </a-button>
@@ -71,10 +68,9 @@
 import {
   FileTextOutlined,
   LinkOutlined,
-  EyeOutlined,
   CopyOutlined,
 } from '@ant-design/icons-vue';
-import type { RetrievalResult } from '../GbRetrieval.api';
+import { getSourceColor, getSourceLabel, type RetrievalResult } from '../GbRetrieval.api';
 
 defineProps<{
   result: RetrievalResult;
@@ -82,7 +78,6 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'copy-content'): void;
-  (e: 'view-in-document'): void;
 }>();
 
 const paramColumns = [
@@ -91,32 +86,6 @@ const paramColumns = [
   { title: '单位', dataIndex: 'unit', key: 'unit' },
   { title: '公式', dataIndex: 'formula', key: 'formula' },
 ];
-
-const getSourceColor = (source: string): string => {
-  const colorMap: Record<string, string> = {
-    VECTOR: 'purple',
-    STRUCTURE: 'cyan',
-    TERM: 'orange',
-    FUSION_RRF: 'gold',
-    FUSION_WEIGHTED: 'lime',
-  };
-  return colorMap[source] || 'default';
-};
-
-const getSourceLabel = (source: string): string => {
-  const labelMap: Record<string, string> = {
-    VECTOR: '向量检索',
-    STRUCTURE: '结构化检索',
-    TERM: '术语检索',
-    FUSION_RRF: 'RRF融合',
-    FUSION_WEIGHTED: '加权融合',
-  };
-  return labelMap[source] || source;
-};
-
-const handleViewInDocument = () => {
-  emit('view-in-document');
-};
 
 const handleCopyContent = () => {
   emit('copy-content');
@@ -128,6 +97,7 @@ const handleCopyContent = () => {
 .gb-evidence-panel {
   padding: 16px;
   background: #fff;
+  border: 1px solid #f0f0f0;
   border-radius: 8px;
   height: 100%;
   overflow-y: auto;

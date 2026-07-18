@@ -1,7 +1,13 @@
 <template>
   <div class="gb-retrieval-page">
     <div class="page-header">
-      <h2>GB 知识检索</h2>
+      <a-breadcrumb class="breadcrumb">
+        <a-breadcrumb-item>
+          <a @click="goBack"><ArrowLeftOutlined /> 知识库列表</a>
+        </a-breadcrumb-item>
+        <a-breadcrumb-item>GB 知识检索</a-breadcrumb-item>
+      </a-breadcrumb>
+      <h2><FileSearchOutlined /> GB 知识检索</h2>
       <p class="description" v-if="knowledgeName">
         知识库：{{ knowledgeName }}
       </p>
@@ -24,7 +30,6 @@
           v-if="selectedResult"
           :result="selectedResult"
           @copy-content="handleCopyContent"
-          @view-in-document="handleViewInDocument"
         />
         <div v-else class="empty-detail">
           <FileSearchOutlined style="font-size: 64px; color: #d9d9d9" />
@@ -38,14 +43,15 @@
 <script lang="ts" setup>
 //update-begin---author:song ---date:2026-07-14  for：【GB检索P2】重构检索页容器，从路由读取参数并接入证据面板-----------
 import { ref, computed } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { FileSearchOutlined } from '@ant-design/icons-vue';
+import { FileSearchOutlined, ArrowLeftOutlined } from '@ant-design/icons-vue';
 import GbRetrievalPanel from './components/GbRetrievalPanel.vue';
 import GbEvidencePanel from './components/GbEvidencePanel.vue';
 import type { RetrievalResult } from './GbRetrieval.api';
 
 const route = useRoute();
+const router = useRouter();
 
 const knowledgeId = computed(() => {
   const id = route.query.knowledgeId;
@@ -63,10 +69,8 @@ const handleResultClick = (result: RetrievalResult) => {
   selectedResult.value = result;
 };
 
-const handleViewInDocument = () => {
-  if (!selectedResult.value) return;
-  // P1 预留：文档定位功能在 P2 实现
-  message.info('文档定位功能开发中');
+const goBack = () => {
+  router.push('/super/airag/aiknowledge/AiKnowledgeBaseList');
 };
 
 const handleCopyContent = () => {
@@ -93,18 +97,34 @@ const handleCopyContent = () => {
   .page-header {
     margin-bottom: 16px;
     padding: 16px 24px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #fff;
+    border: 1px solid #f0f0f0;
     border-radius: 8px;
-    color: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+
+    .breadcrumb {
+      margin-bottom: 12px;
+
+      a {
+        color: #1890ff;
+      }
+    }
 
     h2 {
       margin: 0 0 8px 0;
-      font-size: 24px;
+      font-size: 20px;
+      font-weight: 600;
+      color: #262626;
+
+      .anticon {
+        margin-right: 8px;
+        color: #1890ff;
+      }
     }
 
     .description {
       margin: 0;
-      opacity: 0.9;
+      color: #8c8c8c;
     }
   }
 
@@ -132,6 +152,7 @@ const handleCopyContent = () => {
         align-items: center;
         justify-content: center;
         background: #fff;
+        border: 1px solid #f0f0f0;
         border-radius: 8px;
         color: #999;
 

@@ -15,11 +15,13 @@ import org.jeecg.modules.airag.llm.gbstandard.ingestion.GbIngestionPipeline;
 import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbDocStructure;
 import org.jeecg.modules.airag.llm.gbstandard.model.GbStandard;
+import org.jeecg.modules.airag.llm.handler.EmbeddingHandler;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeDocMapper;
 import org.jeecg.common.util.oConvertUtils;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.File;
@@ -27,7 +29,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * GB 国标知识引擎 — 预览/确认 API
@@ -64,6 +72,362 @@ public class GbStandardController {
     @Autowired
     private GbIngestionPipeline ingestionPipeline;
     //update-end---author:song ---date:2026-07-15  for：【GB-RAG v4 P2】注入入库管线，confirm 触发真实抽取/向量化-----------
+
+    //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】向导②解析正文 API（不写向量）-----------
+    @Autowired
+    private EmbeddingHandler embeddingHandler;
+
+    /** 解析任务去重：同一 docId 并发 parse 时复用 */
+    private static final ConcurrentHashMap<String, Boolean> PARSE_IN_FLIGHT = new ConcurrentHashMap<>();
+    private static final ExecutorService PARSE_EXECUTOR = Executors.newFixedThreadPool(4);
+    //update-end---author:song ---date:2026-07-18  for：【GB线性入库】向导②解析正文 API（不写向量）-----------
+
+    // ==================== 线性向导：解析正文 / 状态 / Markdown ====================
+
+    //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】parse/status/markdown 接口-----------
+    /**
+     * 步骤②：仅 MinerU/Tika 解析正文，回写 content，不向量化。
+     * 异步执行；前端轮询 {@link #parseStatus(String)}。
+     */
+    @Operation(summary = "国标文档正文解析（不向量化）")
+    @RequiresPermissions("airag:knowledge:edit")
+    @PostMapping("/{docId}/parse")
+    public Result<?> parseDocumentOnly(@PathVariable String docId,
+                                       @RequestParam(name = "force", defaultValue = "false") boolean force) {
+        if (!gbStandardProperties.isEnabled()) {
+            return Result.error("GB国标知识引擎未启用，请设置 jeecg.airag.gb-standard.enabled=true");
+        }
+        AiragKnowledgeDoc doc = airagKnowledgeDocMapper.selectById(docId);
+        if (doc == null) {
+            return Result.error("文档不存在: " + docId);
+        }
+        // 已有正文且非强制：直接返回
+        if (!force && oConvertUtils.isNotEmpty(resolveMarkdownContent(doc))) {
+            if (oConvertUtils.isEmpty(doc.getParseStatus())
+                    || LLMConsts.PARSE_STATUS_UPLOADED.equals(doc.getParseStatus())
+                    || LLMConsts.PARSE_STATUS_PARSING.equals(doc.getParseStatus())) {
+                // 仅正文就绪，结构未确认前用 UPLOADED/保持；有 content 时标记为可进入结构步的中间态
+                // 这里不置 PARSED（PARSED 专指结构解析完成）
+            }
+            Map<String, Object> ok = new HashMap<>();
+            ok.put("docId", docId);
+            ok.put("parseStatus", doc.getParseStatus());
+            ok.put("hasMarkdown", true);
+            ok.put("message", "已有解析正文");
+            return Result.OK(ok);
+        }
+        if (PARSE_IN_FLIGHT.putIfAbsent(docId, Boolean.TRUE) != null) {
+            Map<String, Object> busy = new HashMap<>();
+            busy.put("docId", docId);
+            busy.put("parseStatus", LLMConsts.PARSE_STATUS_PARSING);
+            busy.put("message", "解析进行中");
+            return Result.OK(busy);
+        }
+        updateParseStatus(doc, LLMConsts.PARSE_STATUS_PARSING);
+        final String finalDocId = docId;
+        CompletableFuture.runAsync(() -> {
+            try {
+                AiragKnowledgeDoc latest = airagKnowledgeDocMapper.selectById(finalDocId);
+                if (latest == null) {
+                    return;
+                }
+                String text = embeddingHandler.extractDocumentTextOnly(latest);
+                if (oConvertUtils.isEmpty(text)) {
+                    latest.setParseStatus(LLMConsts.PARSE_STATUS_UPLOADED);
+                    // 失败原因写入 metadata
+                    JSONObject meta = oConvertUtils.isEmpty(latest.getMetadata())
+                            ? new JSONObject() : JSONObject.parseObject(latest.getMetadata());
+                    if (meta == null) {
+                        meta = new JSONObject();
+                    }
+                    meta.put("parseFailedReason", "解析结果为空");
+                    meta.put("markdownReady", false);
+                    latest.setMetadata(meta.toJSONString());
+                    // 禁止把超长正文写入 content（TEXT 约 64KB）
+                    latest.setContent(null);
+                    airagKnowledgeDocMapper.updateById(latest);
+                    return;
+                }
+                // 正文解析成功：全文只在磁盘 md（metadata.filePath），库表不存全文
+                JSONObject meta = oConvertUtils.isEmpty(latest.getMetadata())
+                        ? new JSONObject() : JSONObject.parseObject(latest.getMetadata());
+                if (meta == null) {
+                    meta = new JSONObject();
+                }
+                meta.put("markdownReady", true);
+                meta.put("markdownLength", text.length());
+                meta.remove("parseFailedReason");
+                latest.setMetadata(meta.toJSONString());
+                //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】content 列 TEXT 放不下国标全文，强制不写 content-----------
+                latest.setContent(null);
+                //update-end---author:song ---date:2026-07-18  for：【GB线性入库】content 列 TEXT 放不下国标全文，强制不写 content-----------
+                // 不置 PARSED：PARSED 留给结构 preview
+                latest.setParseStatus(LLMConsts.PARSE_STATUS_UPLOADED);
+                airagKnowledgeDocMapper.updateById(latest);
+                log.info("[GB线性入库] 正文解析完成, docId={}, contentLen={}, filePath={}",
+                        finalDocId, text.length(), meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH));
+            } catch (Exception e) {
+                log.error("[GB线性入库] 正文解析失败, docId={}: {}", finalDocId, e.getMessage(), e);
+                try {
+                    AiragKnowledgeDoc latest = airagKnowledgeDocMapper.selectById(finalDocId);
+                    if (latest != null) {
+                        latest.setParseStatus(LLMConsts.PARSE_STATUS_UPLOADED);
+                        JSONObject meta = oConvertUtils.isEmpty(latest.getMetadata())
+                                ? new JSONObject() : JSONObject.parseObject(latest.getMetadata());
+                        if (meta == null) {
+                            meta = new JSONObject();
+                        }
+                        meta.put("parseFailedReason", e.getMessage());
+                        meta.put("markdownReady", false);
+                        latest.setMetadata(meta.toJSONString());
+                        airagKnowledgeDocMapper.updateById(latest);
+                    }
+                } catch (Exception ignore) {
+                    // ignore
+                }
+            } finally {
+                PARSE_IN_FLIGHT.remove(finalDocId);
+            }
+        }, PARSE_EXECUTOR);
+
+        Map<String, Object> started = new HashMap<>();
+        started.put("docId", docId);
+        started.put("parseStatus", LLMConsts.PARSE_STATUS_PARSING);
+        started.put("message", "已开始解析");
+        return Result.OK(started);
+    }
+
+    /**
+     * 轮询文档国标解析/入库状态（向导②④）
+     */
+    @Operation(summary = "查询国标文档解析状态")
+    @RequiresPermissions("airag:knowledge:edit")
+    @GetMapping("/{docId}/status")
+    public Result<?> parseStatus(@PathVariable String docId) {
+        AiragKnowledgeDoc doc = airagKnowledgeDocMapper.selectById(docId);
+        if (doc == null) {
+            return Result.error("文档不存在: " + docId);
+        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("docId", docId);
+        data.put("status", doc.getStatus());
+        data.put("parseStatus", doc.getParseStatus());
+        data.put("title", doc.getTitle());
+        boolean hasMarkdown = oConvertUtils.isNotEmpty(resolveMarkdownContent(doc));
+        data.put("hasMarkdown", hasMarkdown);
+        data.put("parsing", PARSE_IN_FLIGHT.containsKey(docId)
+                || LLMConsts.PARSE_STATUS_PARSING.equals(doc.getParseStatus()));
+        data.put("indexing", LLMConsts.PARSE_STATUS_INDEXING.equals(doc.getParseStatus())
+                || LLMConsts.PARSE_STATUS_CONFIRMED.equals(doc.getParseStatus()));
+        if (oConvertUtils.isNotEmpty(doc.getMetadata())) {
+            try {
+                JSONObject meta = JSONObject.parseObject(doc.getMetadata());
+                if (meta != null) {
+                    data.put("markdownReady", meta.getBooleanValue("markdownReady") || hasMarkdown);
+                    data.put("parseFailedReason", meta.getString("parseFailedReason"));
+                    data.put("filePath", meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH));
+                    // 原始 PDF 路径（解析后 filePath 可能已变为 md）
+                    data.put("originalFilePath", meta.getString("originalFilePath"));
+                    data.put("markdownLength", meta.get("markdownLength"));
+                }
+            } catch (Exception ignore) {
+                // ignore
+            }
+        } else {
+            data.put("markdownReady", hasMarkdown);
+        }
+        return Result.OK(data);
+    }
+
+    /**
+     * 获取解析正文 Markdown（向导②展示）
+     * <p>会把相对图片路径改写为 /sys/common/static/... 以便前端预览直接显示。</p>
+     */
+    @Operation(summary = "获取国标文档解析 Markdown")
+    @RequiresPermissions("airag:knowledge:edit")
+    @GetMapping("/{docId}/markdown")
+    public Result<?> getMarkdown(@PathVariable String docId) {
+        AiragKnowledgeDoc doc = airagKnowledgeDocMapper.selectById(docId);
+        if (doc == null) {
+            return Result.error("文档不存在: " + docId);
+        }
+        String md = resolveMarkdownContent(doc);
+        String sourcesPath = null;
+        String filePath = null;
+        if (oConvertUtils.isNotEmpty(doc.getMetadata())) {
+            try {
+                JSONObject meta = JSONObject.parseObject(doc.getMetadata());
+                if (meta != null) {
+                    sourcesPath = meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_SOURCES_PATH);
+                    filePath = meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH);
+                }
+            } catch (Exception ignore) {
+                // ignore
+            }
+        }
+        // 相对图片 → 静态访问 URL，预览才能显示图
+        if (oConvertUtils.isNotEmpty(md)) {
+            md = rewriteMarkdownImagesForPreview(md, sourcesPath, filePath);
+        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("docId", docId);
+        data.put("markdown", md == null ? "" : md);
+        data.put("hasMarkdown", oConvertUtils.isNotEmpty(md));
+        data.put("parseStatus", doc.getParseStatus());
+        data.put("sourcesPath", sourcesPath);
+        data.put("filePath", filePath);
+        return Result.OK(data);
+    }
+
+    /**
+     * 将 md 中本地相对图片路径改写为可通过 /sys/common/static/ 访问的路径。
+     * MinerU 典型写法：![x](images/abc.jpg)，文件在 sourcesPath/images/ 下。
+     */
+    private String rewriteMarkdownImagesForPreview(String markdown, String sourcesPath, String filePath) {
+        if (oConvertUtils.isEmpty(markdown)) {
+            return markdown;
+        }
+        String baseDir = sourcesPath;
+        if (oConvertUtils.isEmpty(baseDir) && oConvertUtils.isNotEmpty(filePath)) {
+            // 从 md 文件路径推目录
+            int slash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+            if (slash > 0) {
+                baseDir = filePath.substring(0, slash + 1);
+            }
+        }
+        if (oConvertUtils.isEmpty(baseDir)) {
+            return markdown;
+        }
+        String base = baseDir.replace("\\", "/");
+        if (!base.endsWith("/")) {
+            base = base + "/";
+        }
+        // 去掉开头 /
+        while (base.startsWith("/")) {
+            base = base.substring(1);
+        }
+        final String staticPrefix = "/sys/common/static/" + base;
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
+        java.util.regex.Matcher m = p.matcher(markdown);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String alt = m.group(1);
+            String src = m.group(2).trim();
+            // 去掉 title 部分: url "title"
+            int sp = src.indexOf(' ');
+            if (sp > 0) {
+                src = src.substring(0, sp);
+            }
+            if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/sys/common/static/")) {
+                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group(0)));
+                continue;
+            }
+            // 相对路径
+            String rel = src.replace("\\", "/");
+            if (rel.startsWith("./")) {
+                rel = rel.substring(2);
+            }
+            while (rel.startsWith("/")) {
+                rel = rel.substring(1);
+            }
+            String abs = staticPrefix + rel;
+            abs = abs.replaceAll("(?<!https:)(?<!http:)//+", "/");
+            String rep = "![" + alt + "](" + abs + ")";
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(rep));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * 保存用户修正后的 Markdown 正文（写回磁盘 .md，不写 content 列）。
+     * 用于向导②：公式/错字对照 PDF 复制后修正。
+     */
+    @Operation(summary = "保存国标解析 Markdown（人工修正）")
+    @RequiresPermissions("airag:knowledge:edit")
+    @PutMapping("/{docId}/markdown")
+    public Result<?> saveMarkdown(@PathVariable String docId, @RequestBody Map<String, Object> body) {
+        if (!gbStandardProperties.isEnabled()) {
+            return Result.error("GB国标知识引擎未启用");
+        }
+        AiragKnowledgeDoc doc = airagKnowledgeDocMapper.selectById(docId);
+        if (doc == null) {
+            return Result.error("文档不存在: " + docId);
+        }
+        Object mdObj = body != null ? body.get("markdown") : null;
+        if (mdObj == null) {
+            return Result.error("markdown 不能为空");
+        }
+        String markdown = String.valueOf(mdObj);
+        try {
+            persistMarkdownToDisk(doc, markdown);
+            // 人工改过后结构可能失效，回到可重新结构确认
+            if (LLMConsts.PARSE_STATUS_PARSED.equals(doc.getParseStatus())
+                    || LLMConsts.PARSE_STATUS_CONFIRMED.equals(doc.getParseStatus())) {
+                doc.setParseStatus(LLMConsts.PARSE_STATUS_UPLOADED);
+            }
+            doc.setContent(null);
+            airagKnowledgeDocMapper.updateById(doc);
+            Map<String, Object> data = new HashMap<>();
+            data.put("docId", docId);
+            data.put("markdownLength", markdown.length());
+            data.put("message", "已保存修正");
+            return Result.OK(data);
+        } catch (Exception e) {
+            log.error("[GB线性入库] 保存 markdown 失败, docId={}: {}", docId, e.getMessage(), e);
+            return Result.error("保存失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 将 markdown 写回 metadata.filePath 指向的 .md；若当前仍是 PDF 路径则新建 md 文件。
+     */
+    private void persistMarkdownToDisk(AiragKnowledgeDoc doc, String markdown) throws IOException {
+        JSONObject meta = oConvertUtils.isEmpty(doc.getMetadata())
+                ? new JSONObject() : JSONObject.parseObject(doc.getMetadata());
+        if (meta == null) {
+            meta = new JSONObject();
+        }
+        String filePath = meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH);
+        File mdFile;
+        if (oConvertUtils.isNotEmpty(filePath) && isTextLikePath(filePath)) {
+            mdFile = new File(uploadpath + File.separator + filePath);
+            if (!mdFile.exists()) {
+                mdFile = new File(filePath);
+            }
+            if (!mdFile.getParentFile().exists() && !mdFile.getParentFile().mkdirs()) {
+                throw new IOException("无法创建目录: " + mdFile.getParent());
+            }
+        } else {
+            // 保留原 PDF 路径
+            if (oConvertUtils.isNotEmpty(filePath) && !meta.containsKey("originalFilePath")) {
+                meta.put("originalFilePath", filePath);
+            }
+            String baseName = oConvertUtils.isNotEmpty(doc.getTitle()) ? doc.getTitle() : "doc";
+            baseName = baseName.replaceAll("[\\\\/:*?\"<>|]", "_");
+            if (baseName.length() > 80) {
+                baseName = baseName.substring(0, 80);
+            }
+            String relativeDir = "mineru" + File.separator + java.util.UUID.randomUUID()
+                    + File.separator + baseName + File.separator + "auto" + File.separator;
+            String relativeMd = relativeDir + baseName + ".md";
+            mdFile = new File(uploadpath + File.separator + relativeMd);
+            if (!mdFile.getParentFile().exists() && !mdFile.getParentFile().mkdirs()) {
+                throw new IOException("无法创建目录: " + mdFile.getParent());
+            }
+            meta.put(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH, relativeMd);
+            meta.put(LLMConsts.KNOWLEDGE_DOC_METADATA_SOURCES_PATH, relativeDir);
+        }
+        Files.writeString(mdFile.toPath(), markdown, StandardCharsets.UTF_8);
+        meta.put("markdownReady", true);
+        meta.put("markdownLength", markdown.length());
+        meta.put("markdownEdited", true);
+        meta.remove("parseFailedReason");
+        doc.setMetadata(meta.toJSONString());
+        log.info("[GB线性入库] markdown 已保存, docId={}, path={}, len={}",
+                doc.getId(), mdFile.getAbsolutePath(), markdown.length());
+    }
+    //update-end---author:song ---date:2026-07-18  for：【GB线性入库】parse/status/markdown 接口-----------
 
     // ==================== Preview API ====================
 
@@ -106,13 +470,37 @@ public class GbStandardController {
             GbDocStructure structure = structureParser.parse(markdown);
 
             // 5. 创建或更新 gb_standard 记录
+            //    gb_standard 按 (standard_no, version) 唯一：同一标准重复上传（新 docId）时
+            //    必须更新既有记录而非插入，否则撞 uk_standard_no_version 唯一键
             GbStandard existing = findGbStandardByDocId(docId);
+            if (existing == null && oConvertUtils.isNotEmpty(structure.getStandardNo())) {
+                existing = findGbStandardByNoAndVersion(structure.getStandardNo(), structure.getVersion());
+                if (existing != null) {
+                    log.warn("[GB解析] 标准 {}-{} 已有记录(id={})，当前文档 docId={} 关联到该记录并刷新内容",
+                            structure.getStandardNo(), structure.getVersion(), existing.getId(), docId);
+                    existing.setDocId(doc.getId());
+                    existing.setKnowledgeId(doc.getKnowledgeId());
+                }
+            }
             if (existing != null) {
                 updateGbStandardFromStructure(existing, structure, markdown, doc);
                 gbStandardMapper.updateById(existing);
             } else {
-                GbStandard gbStandard = createGbStandardFromStructure(structure, markdown, doc);
-                gbStandardMapper.insert(gbStandard);
+                try {
+                    GbStandard gbStandard = createGbStandardFromStructure(structure, markdown, doc);
+                    gbStandardMapper.insert(gbStandard);
+                } catch (DuplicateKeyException e) {
+                    // 并发等极端情况下仍撞唯一键：按 (standard_no, version) 找既有记录更新
+                    GbStandard dup = findGbStandardByNoAndVersion(structure.getStandardNo(), structure.getVersion());
+                    if (dup == null) {
+                        throw e;
+                    }
+                    log.warn("[GB解析] 唯一键冲突转为更新, standardId={}, docId={}", dup.getId(), docId);
+                    dup.setDocId(doc.getId());
+                    dup.setKnowledgeId(doc.getKnowledgeId());
+                    updateGbStandardFromStructure(dup, structure, markdown, doc);
+                    gbStandardMapper.updateById(dup);
+                }
             }
 
             // 6. 更新文档状态为 PARSED
@@ -263,6 +651,10 @@ public class GbStandardController {
      * 文件类型文档的 content 字段通常为空（EmbeddingHandler.parseFile 不回写 content），
      * 需要从 MinerU 解析后的 markdown 文件读取。
      * </p>
+     * <p>
+     * 注意：上传后 metadata.filePath 往往是原始 PDF。绝不能把 PDF 当 UTF-8 文本读，
+     * 否则会抛 MalformedInputException（Input length = 3）。仅允许读文本类扩展名。
+     * </p>
      *
      * @param doc 知识库文档
      * @return Markdown 文本，无法获取时返回 null
@@ -282,10 +674,20 @@ public class GbStandardController {
             }
             try {
                 JSONObject metadataJson = JSONObject.parseObject(metadataStr);
+                if (metadataJson == null) {
+                    return null;
+                }
                 String filePath = metadataJson.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH);
                 if (oConvertUtils.isEmpty(filePath)) {
                     return null;
                 }
+                //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】禁止把 PDF 当 UTF-8 文本读-----------
+                // 仅读取文本类文件（MinerU 产出 .md）；原始 PDF/Office 跳过
+                if (!isTextLikePath(filePath)) {
+                    log.debug("[GB解析] filePath 非文本文件，跳过按正文读取: {}", filePath);
+                    return null;
+                }
+                //update-end---author:song ---date:2026-07-18  for：【GB线性入库】禁止把 PDF 当 UTF-8 文本读-----------
                 // 构建完整文件路径
                 File mdFile = new File(uploadpath + File.separator + filePath);
                 if (!mdFile.exists()) {
@@ -296,6 +698,9 @@ public class GbStandardController {
                     return Files.readString(mdFile.toPath(), StandardCharsets.UTF_8);
                 }
                 log.warn("[GB解析] MinerU 解析后的文件不存在: {}", mdFile.getAbsolutePath());
+            } catch (java.nio.charset.MalformedInputException e) {
+                // 防御：扩展名误判或文件实际为二进制
+                log.warn("[GB解析] 文件不是合法 UTF-8 文本，跳过: {}", e.getMessage());
             } catch (IOException e) {
                 log.error("[GB解析] 读取文档文件失败: {}", e.getMessage(), e);
             } catch (Exception e) {
@@ -305,11 +710,50 @@ public class GbStandardController {
         return null;
     }
 
+    //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】文本路径判断-----------
+    /**
+     * 判断路径是否可能是可按 UTF-8 读取的文本（md/txt 等），排除 pdf/office 等二进制。
+     */
+    private boolean isTextLikePath(String filePath) {
+        if (oConvertUtils.isEmpty(filePath)) {
+            return false;
+        }
+        String lower = filePath.toLowerCase();
+        // 去掉 query
+        int q = lower.indexOf('?');
+        if (q >= 0) {
+            lower = lower.substring(0, q);
+        }
+        return lower.endsWith(".md")
+                || lower.endsWith(".markdown")
+                || lower.endsWith(".txt")
+                || lower.endsWith(".html")
+                || lower.endsWith(".htm")
+                || lower.endsWith(".json")
+                || lower.endsWith(".csv");
+    }
+    //update-end---author:song ---date:2026-07-18  for：【GB线性入库】文本路径判断-----------
+
     private GbStandard findGbStandardByDocId(String docId) {
         return gbStandardMapper.selectOne(
                 new LambdaQueryWrapper<GbStandard>()
                         .eq(GbStandard::getDocId, docId)
                         .last("LIMIT 1"));
+    }
+
+    /**
+     * 按唯一键 (standard_no, version) 查记录；version 为空时匹配 NULL。
+     */
+    private GbStandard findGbStandardByNoAndVersion(String standardNo, String version) {
+        LambdaQueryWrapper<GbStandard> wrapper = new LambdaQueryWrapper<GbStandard>()
+                .eq(GbStandard::getStandardNo, standardNo)
+                .last("LIMIT 1");
+        if (oConvertUtils.isNotEmpty(version)) {
+            wrapper.eq(GbStandard::getVersion, version);
+        } else {
+            wrapper.isNull(GbStandard::getVersion);
+        }
+        return gbStandardMapper.selectOne(wrapper);
     }
 
     private void updateParseStatus(AiragKnowledgeDoc doc, String status) {

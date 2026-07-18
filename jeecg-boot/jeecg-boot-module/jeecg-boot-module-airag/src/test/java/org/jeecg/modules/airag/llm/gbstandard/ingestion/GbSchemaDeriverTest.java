@@ -31,7 +31,9 @@ class GbSchemaDeriverTest {
     @BeforeEach
     void setUp() {
         config = new GbStandardProperties.SchemaDeriver();
-        deriver = new GbSchemaDeriver(airagModelService, config, new ObjectMapper(), llmClient);
+        GbStandardProperties properties = new GbStandardProperties();
+        properties.setSchemaDeriver(config);
+        deriver = new GbSchemaDeriver(airagModelService, properties, new ObjectMapper(), llmClient);
     }
 
     @Test

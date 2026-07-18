@@ -3,9 +3,6 @@ import { defHttp } from '/@/utils/http/axios';
 
 enum Api {
   query = '/airag/gb-standard/retrieval/query',
-  extractIntent = '/airag/gb-standard/retrieval/extract-intent',
-  queryClause = '/airag/gb-standard/retrieval/clause',
-  queryParameter = '/airag/gb-standard/retrieval/parameter',
 }
 
 /**
@@ -109,28 +106,30 @@ export const queryGbStandard = (params: GbRetrievalRequest) => {
 };
 
 /**
- * 提取意图
+ * 获取来源通道标签颜色
  */
-export const extractIntent = (query: string) => {
-  return defHttp.get<string>({ url: Api.extractIntent, params: { query } });
+export const getSourceColor = (source: string): string => {
+  const colorMap: Record<string, string> = {
+    VECTOR: 'purple',
+    STRUCTURE: 'cyan',
+    TERM: 'orange',
+    FUSION_RRF: 'gold',
+    FUSION_WEIGHTED: 'lime',
+  };
+  return colorMap[source] || 'default';
 };
 
 /**
- * 快速条款查询
+ * 获取来源通道显示名称
  */
-export const queryClause = (standardId: string, clauseNumber: string) => {
-  return defHttp.get<GbRetrievalResponse>({
-    url: `${Api.queryClause}/${standardId}/${clauseNumber}`,
-  });
-};
-
-/**
- * 参数查询
- */
-export const queryParameter = (standardId: string, parameterName: string) => {
-  return defHttp.get<GbRetrievalResponse>({
-    url: `${Api.queryParameter}/${standardId}`,
-    params: { parameterName },
-  });
+export const getSourceLabel = (source: string): string => {
+  const labelMap: Record<string, string> = {
+    VECTOR: '向量检索',
+    STRUCTURE: '结构化检索',
+    TERM: '术语检索',
+    FUSION_RRF: 'RRF融合',
+    FUSION_WEIGHTED: '加权融合',
+  };
+  return labelMap[source] || source;
 };
 //update-end---author:song ---date:2026-07-14  for：【GB检索P1】对齐后端 RetrievalResult / RetrievalResponse 字段-----------

@@ -35,7 +35,9 @@ class GbBatchExtractorTest {
     @BeforeEach
     void setUp() {
         config = new GbStandardProperties.ClauseMetadataExtractor();
-        extractor = new GbBatchExtractor(airagModelService, config, new ObjectMapper(), llmClient);
+        GbStandardProperties properties = new GbStandardProperties();
+        properties.setClauseMetadataExtractor(config);
+        extractor = new GbBatchExtractor(airagModelService, properties, new ObjectMapper(), llmClient);
     }
 
     @Test

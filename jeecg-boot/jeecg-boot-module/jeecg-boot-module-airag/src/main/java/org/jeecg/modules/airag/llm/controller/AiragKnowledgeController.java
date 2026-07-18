@@ -18,6 +18,10 @@ import org.jeecg.modules.airag.common.vo.knowledge.KnowledgeSearchResult;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledge;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
+//update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbStandard;
+//update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
 import org.jeecg.modules.airag.llm.handler.EmbeddingHandler;
 import org.jeecg.modules.airag.llm.service.IAiragKnowledgeDocService;
 import org.jeecg.modules.airag.llm.service.IAiragKnowledgeService;
@@ -30,6 +34,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+//update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
+import java.util.Set;
+import java.util.stream.Collectors;
+//update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
 
 
 /**
@@ -50,6 +58,11 @@ public class AiragKnowledgeController {
 
     @Autowired
     EmbeddingHandler embeddingHandler;
+
+    //update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
+    @Autowired
+    private GbStandardMapper gbStandardMapper;
+    //update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
 
     /**
      * 分页列表查询知识库
@@ -201,8 +214,31 @@ public class AiragKnowledgeController {
         QueryWrapper<AiragKnowledgeDoc> queryWrapper = QueryGenerator.initQueryWrapper(airagKnowledgeDoc, req.getParameterMap());
         Page<AiragKnowledgeDoc> page = new Page<>(pageNo, pageSize);
         IPage<AiragKnowledgeDoc> pageList = airagKnowledgeDocService.page(page, queryWrapper);
+        //update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记（存在 gb_standard 记录即为 true）-----------
+        fillGbDocFlag(pageList.getRecords());
+        //update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
         return Result.OK(pageList);
     }
+
+    //update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
+    /**
+     * 批量填充文档的 gbDoc 标记：gb_standard 表中存在 doc_id 即为国标文档
+     *
+     * @param records 文档列表
+     * @author song
+     * @date 2026/7/18
+     */
+    private void fillGbDocFlag(List<AiragKnowledgeDoc> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        List<String> docIds = records.stream().map(AiragKnowledgeDoc::getId).collect(Collectors.toList());
+        List<GbStandard> gbStandards = gbStandardMapper.selectList(
+                new LambdaQueryWrapper<GbStandard>().select(GbStandard::getDocId).in(GbStandard::getDocId, docIds));
+        Set<String> gbDocIds = gbStandards.stream().map(GbStandard::getDocId).collect(Collectors.toSet());
+        records.forEach(doc -> doc.setGbDoc(gbDocIds.contains(doc.getId())));
+    }
+    //update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
 
     /**
      * 新增或编辑文档

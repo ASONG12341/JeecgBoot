@@ -342,9 +342,10 @@ public class MineruApiClient {
             }
             if (StringUtils.isNotEmpty(result.imagesDir)) {
                 File srcImages = new File(result.imagesDir);
-                //update-begin---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API downloadAndExtractMarkdown签名新增mdFileName参数，images目录从images改为auto与Local模式一致-------
-                File destImages = new File(targetDir, "auto");
-                //update-end---author:song ---date:2026-07-09  for：【AI知识库】MinerU官方API downloadAndExtractMarkdown签名新增mdFileName参数，images目录从images改为auto与Local模式一致-------
+                //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】图片拷到 targetDir/images，与 full.md 内 images/ 相对路径一致（targetDir 已是 auto/）-------
+                // 旧实现拷到 targetDir/auto 会变成 auto/auto，且 md 引用 images/xxx 对不上
+                File destImages = new File(targetDir, "images");
+                //update-end---author:song ---date:2026-07-18  for：【GB线性入库】图片拷到 targetDir/images-------
                 if (srcImages.isDirectory()) {
                     try {
                         FileUtils.copyDirectory(srcImages, destImages);

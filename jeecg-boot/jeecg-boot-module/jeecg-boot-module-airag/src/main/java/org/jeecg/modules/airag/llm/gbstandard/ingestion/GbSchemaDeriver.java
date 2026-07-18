@@ -36,11 +36,12 @@ public class GbSchemaDeriver {
     private final GbLlmClient llmClient;  // Task 0 提取的共享客户端
 
     public GbSchemaDeriver(IAiragModelService airagModelService,
-                           GbStandardProperties.SchemaDeriver config,
+                           GbStandardProperties properties,
                            ObjectMapper objectMapper,
                            GbLlmClient llmClient) {
         this.airagModelService = airagModelService;
-        this.config = config;
+        // SchemaDeriver 是 @ConfigurationProperties 嵌套对象，不是独立 Bean；从外层配置取
+        this.config = properties.getSchemaDeriver();
         this.objectMapper = objectMapper;
         this.llmClient = llmClient;
     }

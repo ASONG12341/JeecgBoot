@@ -209,10 +209,36 @@ public class CommonController {
                 return;
                 //throw new RuntimeException();
             }
-            // 设置强制下载不打开
-            response.setContentType("application/force-download");
-            response.addHeader("Content-Disposition", "attachment;fileName=" + new String(file.getName().getBytes("UTF-8"),"iso-8859-1"));
-            
+            //update-begin---author:song ---date:2026-07-18  for：【静态资源预览】图片/PDF 用正确 Content-Type + inline，便于页面 <img>/预览展示（非强制下载）-----------
+            String lowerName = file.getName().toLowerCase();
+            String contentType = null;
+            if (lowerName.endsWith(".png")) {
+                contentType = "image/png";
+            } else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) {
+                contentType = "image/jpeg";
+            } else if (lowerName.endsWith(".gif")) {
+                contentType = "image/gif";
+            } else if (lowerName.endsWith(".webp")) {
+                contentType = "image/webp";
+            } else if (lowerName.endsWith(".svg")) {
+                contentType = "image/svg+xml";
+            } else if (lowerName.endsWith(".bmp")) {
+                contentType = "image/bmp";
+            } else if (lowerName.endsWith(".pdf")) {
+                contentType = "application/pdf";
+            }
+            String encodedName = new String(file.getName().getBytes("UTF-8"), "iso-8859-1");
+            if (contentType != null) {
+                // 可预览类型：inline，浏览器/img 标签可直接展示
+                response.setContentType(contentType);
+                response.setHeader("Content-Disposition", "inline;fileName=" + encodedName);
+            } else {
+                // 其它文件仍强制下载
+                response.setContentType("application/force-download");
+                response.addHeader("Content-Disposition", "attachment;fileName=" + encodedName);
+            }
+            //update-end---author:song ---date:2026-07-18  for：【静态资源预览】图片/PDF 用正确 Content-Type + inline-----------
+
             // 结合 StreamingResponseBody 的流式写法
             try (InputStream inputStream = new BufferedInputStream(new FileInputStream(file));
                  OutputStream outputStream = response.getOutputStream()) {

@@ -1,0 +1,54 @@
+// 知识库卡片 / 知识库文档卡片 统一风格
+// 供 AiKnowledgeBaseList.vue 与 AiKnowledgeDocList.vue 共用
+.knowledge-card,
+.add-knowledge-card {
+  border-radius: 10px;
+  margin-bottom: 20px;
+  height: 196px;
+  background: #fcfcfd;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 4px #e6e6e6;
+  transition: box-shadow 0.3s ease;
+}
+
+.knowledge-card {
+  margin-right: 20px;
+}
+
+.add-knowledge-card {
+  display: inline-flex;
+  font-size: 16px;
+  width: calc(100% - 20px);
+}
+
+.knowledge-card:hover,
+.add-knowledge-card:hover {
+  box-shadow: 0 6px 12px #d0d3d8;
+}
+
+// 卡片操作按钮（常驻显示，不随 hover 隐藏）
+.operation {
+  border: none;
+  background-color: unset;
+  margin-right: 2px;
+  margin-top: 10px;
+  align-items: end;
+  bottom: 8px;
+  right: 4px;
+  position: absolute;
+}
+
+.operation:hover {
+  color: #000000;
+  background-color: #e9ecf2;
+  border: none;
+}
+
+.ant-dropdown-link {
+  font-size: 14px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 4px;
+  align-content: center;
+  text-align: center;
+}

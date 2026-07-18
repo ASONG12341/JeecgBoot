@@ -67,5 +67,8 @@ public class GbDocStructure implements Serializable {
 
     @Schema(description = "低置信度条款数")
     private int lowConfidenceCount;
+
+    @Schema(description = "规范化后的 Markdown（两阶段解析的阶段一产物，供确认页编辑）")
+    private String normalizedMarkdown;
 }
 //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 GbDocStructure DTO-----------

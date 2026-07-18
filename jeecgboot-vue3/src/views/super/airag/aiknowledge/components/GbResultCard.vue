@@ -75,7 +75,7 @@
 <script lang="ts" setup>
 //update-begin---author:song ---date:2026-07-14  for：【GB检索P2】修复 GbResultCard 类型字段引用-----------
 import { StarOutlined, LinkOutlined, FileTextOutlined, BlockOutlined } from '@ant-design/icons-vue';
-import type { RetrievalResult } from '../GbRetrieval.api';
+import { getSourceColor, getSourceLabel, type RetrievalResult } from '../GbRetrieval.api';
 
 const props = defineProps<{
   result: RetrievalResult;
@@ -93,28 +93,6 @@ const truncateContent = (content: string | undefined, maxLength: number): string
   return content.substring(0, maxLength) + '...';
 };
 
-const getSourceColor = (source: string): string => {
-  const colorMap: Record<string, string> = {
-    VECTOR: 'purple',
-    STRUCTURE: 'cyan',
-    TERM: 'orange',
-    FUSION_RRF: 'gold',
-    FUSION_WEIGHTED: 'lime',
-  };
-  return colorMap[source] || 'default';
-};
-
-const getSourceLabel = (source: string): string => {
-  const labelMap: Record<string, string> = {
-    VECTOR: '向量检索',
-    STRUCTURE: '结构化检索',
-    TERM: '术语检索',
-    FUSION_RRF: 'RRF融合',
-    FUSION_WEIGHTED: '加权融合',
-  };
-  return labelMap[source] || source;
-};
-
 const handleClick = () => {
   emit('click', props.result);
 };
@@ -125,7 +103,7 @@ const handleClick = () => {
 .gb-result-card {
   padding: 16px;
   background: #fff;
-  border: 1px solid #e8e8e8;
+  border: 1px solid #f0f0f0;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s;
@@ -145,8 +123,9 @@ const handleClick = () => {
       .rank-number {
         display: inline-block;
         padding: 4px 12px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: #fff;
+        background: #e6f7ff;
+        border: 1px solid #91d5ff;
+        color: #1890ff;
         border-radius: 12px;
         font-weight: bold;
         font-size: 14px;

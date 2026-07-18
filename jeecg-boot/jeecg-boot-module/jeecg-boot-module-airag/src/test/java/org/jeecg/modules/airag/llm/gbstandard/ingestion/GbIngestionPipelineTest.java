@@ -43,7 +43,7 @@ class GbIngestionPipelineTest {
     @Mock private GbAuditLogRepository auditLogRepository;
     @Mock private GbStandardMapper gbStandardMapper;
     @Mock private ObjectMapper objectMapper;
-    @Mock private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig;
+    @Mock private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties gbStandardProperties;
     //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING：注入 EmbeddingHandler + GbStandardResolver，加 3 个断点-catching verify-----------
     @Mock private EmbeddingHandler embeddingHandler;
     @Mock private GbStandardResolver gbStandardResolver;
@@ -63,7 +63,10 @@ class GbIngestionPipelineTest {
         structure.setClauses(List.of(node));
 
         when(schemaDeriver.derive(any())).thenReturn(new DomainSchema());
-        when(clauseMetadataConfig.getBatchSize()).thenReturn(10);
+        org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig =
+                new org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor();
+        clauseMetadataConfig.setBatchSize(10);
+        when(gbStandardProperties.getClauseMetadataExtractor()).thenReturn(clauseMetadataConfig);
         BatchExtractResult result = new BatchExtractResult();
         result.setClausePath("9.2");
         result.setPrimaryType("overcharge");

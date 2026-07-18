@@ -158,6 +158,7 @@ const handleResultClick = (result: RetrievalResult) => {
 .gb-retrieval-panel {
   padding: 16px;
   background: #fff;
+  border: 1px solid #f0f0f0;
   border-radius: 8px;
 
   .query-section {

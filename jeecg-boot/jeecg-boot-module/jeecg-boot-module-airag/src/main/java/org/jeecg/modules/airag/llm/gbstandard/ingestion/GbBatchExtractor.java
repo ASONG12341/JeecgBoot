@@ -42,11 +42,12 @@ public class GbBatchExtractor {
     private final GbLlmClient llmClient;  // Task 0 提取的共享客户端
 
     public GbBatchExtractor(IAiragModelService airagModelService,
-                            GbStandardProperties.ClauseMetadataExtractor config,
+                            GbStandardProperties properties,
                             ObjectMapper objectMapper,
                             GbLlmClient llmClient) {
         this.airagModelService = airagModelService;
-        this.config = config;
+        // ClauseMetadataExtractor 是 @ConfigurationProperties 嵌套对象，不是独立 Bean；从外层配置取
+        this.config = properties.getClauseMetadataExtractor();
         this.objectMapper = objectMapper;
         this.llmClient = llmClient;
     }

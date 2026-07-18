@@ -50,6 +50,9 @@ public class GbClauseNode implements Serializable {
     @Schema(description = "解析置信度: high/medium/low")
     private String confidence;
 
+    @Schema(description = "命中的解析规则: HEADING_OK/SPLIT_JOINED/PROMOTED/OCR_REPAIRED/APPENDIX")
+    private String parseRule;
+
     @Schema(description = "原文页码")
     private Integer pageNo;
 

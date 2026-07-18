@@ -17,6 +17,14 @@ import org.jeecg.common.util.filter.SsrfFileTypeFilter;
 import org.jeecg.modules.airag.llm.consts.LLMConsts;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledge;
 import org.jeecg.modules.airag.llm.entity.AiragKnowledgeDoc;
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbClauseMapper;
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbParameterMapper;
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbReferenceMapper;
+import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbClause;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbParameter;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbReference;
+import org.jeecg.modules.airag.llm.gbstandard.model.GbStandard;
 import org.jeecg.modules.airag.llm.handler.EmbeddingHandler;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeDocMapper;
 import org.jeecg.modules.airag.llm.mapper.AiragKnowledgeMapper;
@@ -64,6 +72,17 @@ public class AiragKnowledgeDocServiceImpl extends ServiceImpl<AiragKnowledgeDocM
     @Autowired
     EmbeddingHandler embeddingHandler;
 
+    //update-begin---author:song ---date:2026-07-18  for：【GB-RAG v4】删除文档时级联清理国标结构化数据（否则旧 gb_standard 记录残留导致重复上传撞唯一键）-----------
+    @Autowired
+    private GbStandardMapper gbStandardMapper;
+    @Autowired
+    private GbClauseMapper gbClauseMapper;
+    @Autowired
+    private GbParameterMapper gbParameterMapper;
+    @Autowired
+    private GbReferenceMapper gbReferenceMapper;
+    //update-end---author:song ---date:2026-07-18  for：【GB-RAG v4】删除文档时级联清理国标结构化数据-----------
+
 
     @Value(value = "${jeecg.path.upload:}")
     private String uploadpath;
@@ -102,8 +121,31 @@ public class AiragKnowledgeDocServiceImpl extends ServiceImpl<AiragKnowledgeDocM
         }
 
         airagKnowledgeDoc.setStatus(KNOWLEDGE_DOC_STATUS_DRAFT);
+        //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】支持 autoEmbed=false 仅落库不向量化（国标向导①）-----------
+        boolean autoEmbed = true;
+        String metadataStr = airagKnowledgeDoc.getMetadata();
+        if (oConvertUtils.isNotEmpty(metadataStr)) {
+            try {
+                JSONObject meta = JSONObject.parseObject(metadataStr);
+                if (meta != null && meta.containsKey("autoEmbed")) {
+                    autoEmbed = meta.getBooleanValue("autoEmbed");
+                }
+                // 国标向导上传：强制进入 UPLOADED，避免与 complete 状态打架
+                if (!autoEmbed && oConvertUtils.isEmpty(airagKnowledgeDoc.getParseStatus())) {
+                    airagKnowledgeDoc.setParseStatus(PARSE_STATUS_UPLOADED);
+                }
+            } catch (Exception ignore) {
+                // metadata 非 JSON 时保持默认 autoEmbed=true
+            }
+        }
+        //update-end---author:song ---date:2026-07-18  for：【GB线性入库】支持 autoEmbed=false 仅落库不向量化（国标向导①）-----------
         // 保存到数据库
         if (this.saveOrUpdate(airagKnowledgeDoc)) {
+            //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】autoEmbed=false 跳过 rebuildDocument-----------
+            if (!autoEmbed) {
+                return Result.OK(airagKnowledgeDoc);
+            }
+            //update-end---author:song ---date:2026-07-18  for：【GB线性入库】autoEmbed=false 跳过 rebuildDocument-----------
             // 重建向量
             return this.rebuildDocument(airagKnowledgeDoc.getId());
         } else {
@@ -233,6 +275,9 @@ public class AiragKnowledgeDocServiceImpl extends ServiceImpl<AiragKnowledgeDocM
             // 删除数据
             airagKnowledgeDocMapper.deleteByMainId(knowId);
         }
+        //update-begin---author:song ---date:2026-07-18  for：【GB-RAG v4】删除知识库时级联清理国标结构化数据-----------
+        deleteGbDataByKnowIds(knowIds);
+        //update-end---author:song ---date:2026-07-18  for：【GB-RAG v4】-----------
         return Result.OK();
     }
 
@@ -266,12 +311,63 @@ public class AiragKnowledgeDocServiceImpl extends ServiceImpl<AiragKnowledgeDocM
             // 删除数据
             airagKnowledgeDocMapper.deleteBatchIds(groupedDocIds);
         });
+        //update-begin---author:song ---date:2026-07-18  for：【GB-RAG v4】删除文档时级联清理国标结构化数据（gb_standard/gb_clause/gb_parameter/gb_reference）-----------
+        deleteGbDataByDocIds(docIds);
+        //update-end---author:song ---date:2026-07-18  for：【GB-RAG v4】-----------
         return Result.ok("success");
     }
 
+    //update-begin---author:song ---date:2026-07-18  for：【GB-RAG v4】删除文档时级联清理国标结构化数据（否则旧 gb_standard 记录残留导致重复上传撞唯一键）-----------
+    /**
+     * 级联删除文档关联的国标结构化数据（gb_standard + gb_clause + gb_parameter + gb_reference）。
+     * 失败只记日志不阻断文档删除（与向量删除的容错策略一致）。
+     */
+    private void deleteGbDataByDocIds(List<String> docIds) {
+        try {
+            List<GbStandard> standards = gbStandardMapper.selectList(
+                    new LambdaQueryWrapper<GbStandard>()
+                            .in(GbStandard::getDocId, docIds)
+                            .select(GbStandard::getId, GbStandard::getDocId));
+            deleteGbDataByStandards(standards);
+        } catch (Exception e) {
+            log.error("[GB级联删除] 按文档删除国标数据失败, docIds={}: {}", docIds, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 级联删除知识库关联的国标结构化数据（按 knowledge_id 匹配 gb_standard）。
+     */
+    private void deleteGbDataByKnowIds(List<String> knowIds) {
+        try {
+            List<GbStandard> standards = gbStandardMapper.selectList(
+                    new LambdaQueryWrapper<GbStandard>()
+                            .in(GbStandard::getKnowledgeId, knowIds)
+                            .select(GbStandard::getId, GbStandard::getDocId));
+            deleteGbDataByStandards(standards);
+        } catch (Exception e) {
+            log.error("[GB级联删除] 按知识库删除国标数据失败, knowIds={}: {}", knowIds, e.getMessage(), e);
+        }
+    }
+
+    private void deleteGbDataByStandards(List<GbStandard> standards) {
+        if (standards == null || standards.isEmpty()) {
+            return;
+        }
+        List<String> standardIds = standards.stream().map(GbStandard::getId).collect(Collectors.toList());
+        int clauseCount = gbClauseMapper.delete(
+                new LambdaQueryWrapper<GbClause>().in(GbClause::getStandardId, standardIds));
+        int paramCount = gbParameterMapper.delete(
+                new LambdaQueryWrapper<GbParameter>().in(GbParameter::getStandardId, standardIds));
+        int refCount = gbReferenceMapper.delete(
+                new LambdaQueryWrapper<GbReference>().in(GbReference::getSourceStandardId, standardIds));
+        gbStandardMapper.deleteBatchIds(standardIds);
+        log.info("[GB级联删除] 已清理国标结构化数据, standardIds={}, 条款={}, 参数={}, 引用={}",
+                standardIds, clauseCount, paramCount, refCount);
+    }
+    //update-end---author:song ---date:2026-07-18  for：【GB-RAG v4】删除文档时级联清理国标结构化数据-----------
+
     @Override
-    public Result<?> deleteAllByKnowId(String knowId) {
-        if (oConvertUtils.isEmpty(knowId)) {
+    public Result<?> deleteAllByKnowId(String knowId) {        if (oConvertUtils.isEmpty(knowId)) {
             return Result.error("知识库id不能为空");
         }
         LambdaQueryWrapper<AiragKnowledgeDoc> wrapper = new LambdaQueryWrapper<>();

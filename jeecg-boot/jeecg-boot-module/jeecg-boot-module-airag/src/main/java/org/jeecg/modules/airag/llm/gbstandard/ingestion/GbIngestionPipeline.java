@@ -3,6 +3,7 @@ package org.jeecg.modules.airag.llm.gbstandard.ingestion;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties;
 import org.jeecg.modules.airag.llm.gbstandard.ingestion.dto.BatchExtractResult;
 import org.jeecg.modules.airag.llm.gbstandard.mapper.GbStandardMapper;
 import org.jeecg.modules.airag.llm.gbstandard.model.*;
@@ -42,7 +43,8 @@ public class GbIngestionPipeline {
     @Autowired private GbAuditLogRepository auditLogRepository;
     @Autowired private GbStandardMapper gbStandardMapper;
     @Autowired private ObjectMapper objectMapper;
-    @Autowired private org.jeecg.modules.airag.llm.gbstandard.config.GbStandardProperties.ClauseMetadataExtractor clauseMetadataConfig;
+    // 嵌套配置不是独立 Bean；注入外层 GbStandardProperties 再取 clauseMetadataExtractor
+    @Autowired private GbStandardProperties gbStandardProperties;
     //update-begin---author:song ---date:2026-07-17  for：【GB-RAG v4 P5 Task 4】MASTER WIRING：注入 EmbeddingHandler（向量化断路）+ GbStandardResolver（跨标准引用目标解析）-----------
     @Autowired private EmbeddingHandler embeddingHandler;
     @Autowired private GbStandardResolver gbStandardResolver;
@@ -61,7 +63,7 @@ public class GbIngestionPipeline {
 
             // 2. 扁平化条款树 + 分批抽取
             List<GbClauseNode> flatClauses = flatten(structure != null ? structure.getClauses() : Collections.emptyList());
-            int batchSize = Math.max(1, clauseMetadataConfig.getBatchSize()); // 从配置读取，防御性下限 1
+            int batchSize = Math.max(1, gbStandardProperties.getClauseMetadataExtractor().getBatchSize()); // 从配置读取，防御性下限 1
             List<BatchExtractResult> allResults = new ArrayList<>();
             for (int i = 0; i < flatClauses.size(); i += batchSize) {
                 List<GbClauseNode> batch = flatClauses.subList(i, Math.min(i + batchSize, flatClauses.size()));

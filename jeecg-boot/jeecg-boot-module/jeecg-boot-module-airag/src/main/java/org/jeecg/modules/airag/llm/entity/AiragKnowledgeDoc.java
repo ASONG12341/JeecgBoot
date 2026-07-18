@@ -132,4 +132,13 @@ public class AiragKnowledgeDoc implements Serializable {
     private String parseStatus;
     //update-end---author:song ---date:2026-07-14  for：【GB知识引擎】Phase 1 文档解析状态字段-----------
 
+    //update-begin---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记（非表字段，存在 gb_standard 记录即为 true）-----------
+    /**
+     * 是否国标入库文档（存在 gb_standard 记录即为 true），非表字段
+     */
+    @TableField(exist = false)
+    @Schema(description = "是否国标入库文档")
+    private Boolean gbDoc;
+    //update-end---author:song ---date:2026-07-18  for：【GB知识引擎】文档列表返回 gbDoc 标记-----------
+
 }

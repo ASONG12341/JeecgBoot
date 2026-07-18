@@ -113,25 +113,18 @@
     />
     <!--添加知识库弹窗-->
     <KnowledgeBaseModal @register="registerModal" @success="reload"></KnowledgeBaseModal>
-    <!-- 知识库文档弹窗 -->
-    <AiragKnowledgeDocListModal @register="docListRegister"></AiragKnowledgeDocListModal>
   </div>
 </template>
 
 <script lang="ts">
   import { reactive, ref } from 'vue';
-  //update-begin---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
   import { useRouter } from 'vue-router';
-  //update-end---author:song ---date:2026-07-14 for：【GB检索P1】知识库列表增加 GB 检索入口-----------
   import { useModal } from '/@/components/Modal';
   import { deleteModel, list, rebuild } from './AiKnowledgeBase.api';
   import { doDeleteAllDoc } from "./AiKnowledgeBase.api.util";
   import { Pagination } from 'ant-design-vue';
   import JInput from '@/components/Form/src/jeecg/components/JInput.vue';
   import KnowledgeBaseModal from './components/AiKnowledgeBaseModal.vue';
-  import JSelectUser from '@/components/Form/src/jeecg/components/JSelectUser.vue';
-  import JDictSelectTag from '@/components/Form/src/jeecg/components/JDictSelectTag.vue';
-  import AiragKnowledgeDocListModal from './components/AiragKnowledgeDocListModal.vue';
   import Icon from '@/components/Icon';
   import { useMessage } from "@/hooks/web/useMessage";
 
@@ -139,10 +132,7 @@
     name: 'KnowledgeBaseList',
     components: {
       Icon,
-      AiragKnowledgeDocListModal,
       KnowledgeBaseModal,
-      JDictSelectTag,
-      JSelectUser,
       JInput,
       Pagination,
     },
@@ -152,7 +142,6 @@
 
       //注册modal
       const [registerModal, { openModal }] = useModal();
-      const [docListRegister, { openModal: openDocModal }] = useModal();
 
       //当前页数
       const pageNo = ref<number>(1);
@@ -199,7 +188,6 @@
        * @param item
        */
       function handleEditClick(item) {
-        console.log(item);
         openModal(true, {
           id: item.id,
           isUpdate: true,
@@ -280,16 +268,21 @@
       }
 
       /**
-       * 参数配置点击事件
+       * 知识库卡片点击事件：跳转到知识库文档管理路由页
        *
-       * @param id
-       * @param type
+       * @param item
        */
-      //update-begin---wangshuai---date:20260414  for：【QQYUN-14932】创建知识库时，可以创建一个分段策略，知识库里面的文档默认使用知识库的分段策略------------
+      //update-begin---author:song ---date:2026-07-18  for：【知识库文档管理】全屏弹窗改为独立路由页面-----------
       function handleDocClick(item) {
-        openDocModal(true, { id: item.id, type: item.type, knowledgeMetadata: item.metadata });
-      //update-end---wangshuai---date:20260414  for：【QQYUN-14932】创建知识库时，可以创建一个分段策略，知识库里面的文档默认使用知识库的分段策略------------
+        router.push({
+          path: '/super/airag/aiknowledge/doc-list',
+          query: {
+            knowledgeId: item.id,
+            knowledgeName: item.name,
+          },
+        });
       }
+      //update-end---author:song ---date:2026-07-18  for：【知识库文档管理】全屏弹窗改为独立路由页面-----------
 
       //update-begin---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
       /**
@@ -345,7 +338,6 @@
         wrapperCol,
         formRef,
         handleDocClick,
-        docListRegister,
         handleVectorization,
         //update-begin---song---date:2026-07-14  for：知识库列表增加 GB 检索入口-----------
         goToGbRetrieval,
@@ -356,6 +348,8 @@
 </script>
 
 <style scoped lang="less">
+  @import './styles/knowledge-card.less';
+
   .knowledge {
     height: calc(100vh - 115px);
     background: #f7f8fc;
@@ -445,22 +439,11 @@
     right: 4px;
     top: 6px;
     height: auto;
-    display: none;
   }
   .add-knowledge-card {
-    margin-bottom: 20px;
-    background: #fcfcfd;
-    border: 1px solid #f0f0f0;
-    box-shadow: 0 2px 4px #e6e6e6;
-    transition: all 0.3s ease;
-    border-radius: 10px;
-    display: inline-flex;
     justify-content: center;
     align-items: center;
-    font-size: 16px;
     cursor: pointer;
-    height: 152px;
-    width: calc(100% - 20px);
     .add-knowledge-card-icon {
       padding: 8px;
       color: #1f2329;
@@ -472,27 +455,6 @@
       color:#1f2329;
       font-weight: 400;
       align-self: center;
-    }
-  }
-
-  .add-knowledge-card:hover {
-    box-shadow: 0 6px 12px #d0d3d8;
-  }
-
-  .knowledge-card {
-    margin-right: 20px;
-    margin-bottom: 20px;
-    height: 152px;
-    border-radius: 10px;
-    background: #fcfcfd;
-    border: 1px solid #f0f0f0;
-    box-shadow: 0 2px 4px #e6e6e6;
-    transition: all 0.3s ease;
-  }
-  .knowledge-card:hover {
-    box-shadow: 0 6px 12px #d0d3d8;
-    .knowledge-btn {
-      display: block;
     }
   }
   .pointer {
@@ -524,15 +486,7 @@
     background-color: #e9ecf2;
     border: none;
   }
-  .ant-dropdown-link{
-    font-size: 14px;
-    height: 24px;
-    padding: 0 7px;
-    border-radius: 4px;
-    align-content: center;
-    text-align: center;
-  }
-  
+
   .ellipsis{
     overflow: hidden;
     text-overflow: ellipsis;

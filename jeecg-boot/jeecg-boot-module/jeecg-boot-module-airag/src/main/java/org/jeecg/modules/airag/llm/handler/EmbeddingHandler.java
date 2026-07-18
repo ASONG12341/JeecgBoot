@@ -33,6 +33,7 @@ import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore.SearchMod
 //update-end---author:song-claude ---date:2026-07-11  for：【GB-RAG P1.1 Task 8】PgVectorEmbeddingStore HYBRID 搜索支持--------
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.tika.parser.AutoDetectParser;
 import org.jeecg.ai.factory.AiModelFactory;
@@ -219,6 +220,154 @@ public class EmbeddingHandler implements IEmbeddingHandler {
      * @author chenrui
      * @date 2025/2/18 11:52
      */
+    //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】仅解析正文（MinerU/Tika），不写向量，供向导②使用-----------
+    /**
+     * 仅解析文档正文（不向量化）。
+     * <p>
+     * 国标线性向导步骤②：MinerU 会把 full.md 落到磁盘并回写 metadata.filePath；
+     * <b>禁止</b>把整篇国标 Markdown 写入 {@code airag_knowledge_doc.content}
+     * （MySQL 列为 TEXT，约 64KB，国标全文必触发 Data too long）。
+     * 正文通过 metadata.filePath 指向的 .md 文件读取。
+     * </p>
+     *
+     * @param doc 知识库文档（file 类型会走 MinerU/Tika；会更新 metadata，不写 content）
+     * @return 解析后的正文；失败返回 null
+     */
+    public String extractDocumentTextOnly(AiragKnowledgeDoc doc) {
+        AssertUtils.assertNotEmpty("文档不能为空", doc);
+        String content = doc.getContent();
+        if (oConvertUtils.isEmpty(content)) {
+            switch (doc.getType()) {
+                case KNOWLEDGE_DOC_TYPE_FILE:
+                    if (knowConfigBean.isEnableMinerU()) {
+                        parseFileByMinerU(doc);
+                    }
+                    content = parseFile(doc);
+                    break;
+                case KNOWLEDGE_DOC_TYPE_WEB:
+                    content = parseWebPage(doc);
+                    // web 内容通常较短；若仍过大也不落 content，由调用方决定
+                    break;
+                default:
+                    break;
+            }
+        }
+        // 若正文已解析但 metadata.filePath 仍是 PDF 等二进制路径，落盘为 .md 供后续读取
+        // （MinerU 成功时 filePath 已指向 .md；Tika/失败兜底路径需要这里补写）
+        if (oConvertUtils.isNotEmpty(content) && KNOWLEDGE_DOC_TYPE_FILE.equals(doc.getType())) {
+            ensureMarkdownFilePersisted(doc, content);
+        }
+        // 明确不 setContent：避免 updateById 把超长正文写入 TEXT 列
+        return content;
+    }
+
+    /**
+     * 将解析正文落到 uploadpath 下 .md 文件，并回写 metadata.filePath（相对路径）。
+     * 已是文本路径则不覆盖。
+     */
+    private void ensureMarkdownFilePersisted(AiragKnowledgeDoc doc, String content) {
+        try {
+            String metadataStr = doc.getMetadata();
+            JSONObject meta = oConvertUtils.isEmpty(metadataStr) ? new JSONObject() : JSONObject.parseObject(metadataStr);
+            if (meta == null) {
+                meta = new JSONObject();
+            }
+            String filePath = meta.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH);
+            if (oConvertUtils.isNotEmpty(filePath) && isTextLikeFilePath(filePath)) {
+                // 已有 md 路径（MinerU 成功），不覆盖
+                return;
+            }
+            String baseName = oConvertUtils.isNotEmpty(doc.getTitle())
+                    ? FilenameUtils.getBaseName(doc.getTitle())
+                    : "doc";
+            // 清理非法文件名字符
+            baseName = baseName.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String relativeDir = "mineru" + File.separator + UUIDGenerator.generate() + File.separator + baseName + File.separator + "auto" + File.separator;
+            String relativeMd = relativeDir + baseName + ".md";
+            File outDir = new File(uploadpath + File.separator + relativeDir);
+            if (!outDir.exists() && !outDir.mkdirs()) {
+                log.warn("[GB线性入库] 创建 md 目录失败: {}", outDir.getAbsolutePath());
+                return;
+            }
+            File mdFile = new File(uploadpath + File.separator + relativeMd);
+            FileUtils.writeStringToFile(mdFile, content, StandardCharsets.UTF_8);
+            meta.put(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH, relativeMd);
+            meta.put(LLMConsts.KNOWLEDGE_DOC_METADATA_SOURCES_PATH, relativeDir);
+            // 保留原始上传路径便于 PDF 预览
+            if (oConvertUtils.isNotEmpty(filePath) && !meta.containsKey("originalFilePath")) {
+                meta.put("originalFilePath", filePath);
+            }
+            doc.setMetadata(meta.toJSONString());
+            log.info("[GB线性入库] 正文已落盘 md: {}", relativeMd);
+        } catch (Exception e) {
+            log.warn("[GB线性入库] 正文落盘 md 失败: {}", e.getMessage());
+        }
+    }
+
+    private static boolean isTextLikeFilePath(String filePath) {
+        if (oConvertUtils.isEmpty(filePath)) {
+            return false;
+        }
+        String lower = filePath.toLowerCase();
+        int q = lower.indexOf('?');
+        if (q >= 0) {
+            lower = lower.substring(0, q);
+        }
+        return lower.endsWith(".md")
+                || lower.endsWith(".markdown")
+                || lower.endsWith(".txt")
+                || lower.endsWith(".html")
+                || lower.endsWith(".htm");
+    }
+
+    /**
+     * 将 Markdown 中相对图片路径固化为 /sys/common/static/{sourcesPath}/...
+     * 例：![](images/a.jpg) + sourcesPath=mineru/xx/auto/ → ![](/sys/common/static/mineru/xx/auto/images/a.jpg)
+     */
+    public static String rewriteLocalImagesToStaticPath(String markdown, String sourcesPath) {
+        if (oConvertUtils.isEmpty(markdown) || oConvertUtils.isEmpty(sourcesPath)) {
+            return markdown;
+        }
+        String base = sourcesPath.replace("\\", "/");
+        if (!base.endsWith("/")) {
+            base = base + "/";
+        }
+        while (base.startsWith("/")) {
+            base = base.substring(1);
+        }
+        final String prefix = "/sys/common/static/" + base;
+        Matcher matcher = PATTERN_MD_IMAGE.matcher(markdown);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            String alt = matcher.group(1);
+            String imageUrl = matcher.group(2);
+            if (imageUrl == null) {
+                continue;
+            }
+            String src = imageUrl.trim();
+            int sp = src.indexOf(' ');
+            if (sp > 0) {
+                src = src.substring(0, sp);
+            }
+            if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/sys/common/static/")) {
+                matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
+                continue;
+            }
+            String rel = src.replace("\\", "/");
+            if (rel.startsWith("./")) {
+                rel = rel.substring(2);
+            }
+            while (rel.startsWith("/")) {
+                rel = rel.substring(1);
+            }
+            String abs = (prefix + rel).replaceAll("(?<!https:)(?<!http:)//+", "/");
+            matcher.appendReplacement(sb, Matcher.quoteReplacement("![" + alt + "](" + abs + ")"));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+    //update-end---author:song ---date:2026-07-18  for：【GB线性入库】仅解析正文（MinerU/Tika），不写向量，供向导②使用-----------
+
     public Map<String, Object> embeddingDocument(String knowId, AiragKnowledgeDoc doc) {
         AiragKnowledge airagKnowledge = airagKnowledgeService.getById(knowId);
         AssertUtils.assertNotEmpty("知识库不存在", airagKnowledge);
@@ -1400,9 +1549,33 @@ public class EmbeddingHandler implements IEmbeddingHandler {
             return;
         }
 
-        // 回写 metadata，保持与本地模式一致的相对路径约定
+        // 回写 metadata：md 路径 + sourcesPath；保留原始 PDF 供左侧预览/续跑
+        //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】保留 originalFilePath，刷新后续跑仍能开 PDF-----------
+        String prevPath = metadataJson.getString(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH);
+        if (oConvertUtils.isNotEmpty(prevPath) && !metadataJson.containsKey("originalFilePath")) {
+            // 仅当原路径像 PDF/Office 时保留
+            String lower = prevPath.toLowerCase();
+            if (lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx")
+                    || lower.contains(".pdf") || !isTextLikeFilePath(prevPath)) {
+                metadataJson.put("originalFilePath", prevPath);
+            }
+        }
+        //update-end---author:song ---date:2026-07-18  for：【GB线性入库】保留 originalFilePath-----------
         metadataJson.put(LLMConsts.KNOWLEDGE_DOC_METADATA_FILEPATH, relativeDir + fileBaseName + ".md");
         metadataJson.put(LLMConsts.KNOWLEDGE_DOC_METADATA_SOURCES_PATH, relativeDir);
+        //update-begin---author:song ---date:2026-07-18  for：【GB线性入库】解析阶段就把 images/ 写成可访问静态路径并回写 md 文件-----------
+        // 业界常见做法：入库解析时固化资源 URL，预览不再依赖前端猜相对路径
+        try {
+            String rewritten = rewriteLocalImagesToStaticPath(markdown, relativeDir);
+            if (oConvertUtils.isNotEmpty(rewritten) && !rewritten.equals(markdown)) {
+                File mdOut = new File(outputPath, fileBaseName + ".md");
+                FileUtils.writeStringToFile(mdOut, rewritten, StandardCharsets.UTF_8);
+                log.info("MinerU md 图片路径已固化为 static 路径, file: {}", mdOut.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.warn("MinerU md 图片路径固化失败（预览仍可尝试动态 rewrite）: {}", e.getMessage());
+        }
+        //update-end---author:song ---date:2026-07-18  for：【GB线性入库】解析阶段就把 images/ 写成可访问静态路径并回写 md 文件-----------
         doc.setMetadata(metadataJson.toJSONString());
 
         log.info("MinerU 官方 API 解析结果已写入本地, file: {}, dir: {}, cost: {}ms",
